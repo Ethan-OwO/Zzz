@@ -1,5 +1,6 @@
-import type { LiveStatus, RunningSession } from '../monitor/session';
-import type { SessionRecord } from '../monitor/types';
+import type { RunningSession } from '../monitor/session';
+import type { NightRecord } from '../monitor/types';
+import type { LiveStatusFull } from './app';
 
 const OVERLAY_MS = 10_000;
 
@@ -57,8 +58,9 @@ function row(list: HTMLElement, label: string, field: string): HTMLElement {
 export function renderRecording(
   root: HTMLElement,
   session: RunningSession,
-  onStopped: (s: SessionRecord) => void,
-): { update(s: LiveStatus): void } {
+  night: NightRecord,
+  onStopped: (nightId: string) => void,
+): { update(s: LiveStatusFull): void } {
   document.body.classList.add('recording');
 
   const screen = document.createElement('div');
@@ -73,12 +75,14 @@ export function renderRecording(
   const db = row(list, '最近音量', 'db');
   const ctx = row(list, 'AudioContext', 'ctx');
   const wake = row(list, 'Wake lock', 'wakelock');
+  const eventsRow = row(list, '事件', 'events');
+  const snoreRow = row(list, '打呼', 'snore');
 
   let stopping = false;
   const stopButton = createHoldButton('長按 2 秒停止', 2000, () => {
     if (stopping) return;
     stopping = true;
-    session.stop().then(onStopped, (err: unknown) => {
+    session.stop(night).then(() => onStopped(night.id), (err: unknown) => {
       stopping = false;
       db.textContent = `停止失敗：${err instanceof Error ? err.message : String(err)}`;
     });
@@ -108,12 +112,15 @@ export function renderRecording(
   });
 
   return {
-    update(s: LiveStatus): void {
+    update(s: LiveStatusFull): void {
       elapsed.textContent = hms(s.elapsedMs);
       frames.textContent = String(s.lastFrames);
       db.textContent = s.lastDb === null ? '–' : `${s.lastDb.toFixed(1)} dB`;
       ctx.textContent = s.ctxState;
       wake.textContent = s.wakeLock;
+      const r = s.recorder;
+      eventsRow.textContent = r ? `${r.soundEventCount} 個` : '–';
+      snoreRow.textContent = r?.snapshot.inSnoreEpisode ? '打呼中' : r?.snapshot.state === 'warmup' ? '暖機中' : '—';
       if (s.needsGesture !== needsGesture) {
         needsGesture = s.needsGesture;
         recover.hidden = !needsGesture;

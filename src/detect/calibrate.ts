@@ -50,6 +50,12 @@ export function computeCalibration(quietQ: Uint8Array, speechQ: Uint8Array, p: D
   };
 }
 
+/** Margins actually used for a night: test mode lowers the trigger margin by p.testMarginOffsetDb. */
+export function effectiveMargins(r: CalibrationResult, mode: 'formal' | 'test', p: DetectParams): { trigger: number; release: number } {
+  const trigger = mode === 'test' ? clampMargin(r.triggerMarginDb - p.testMarginOffsetDb) : r.triggerMarginDb;
+  return { trigger, release: releaseOf(trigger, p) };
+}
+
 /** 使用者按 − / + 微調後重新算 release;margin 夾在 6..20,步長 1 dB。 */
 export function adjustMargin(r: CalibrationResult, deltaDb: number, p: DetectParams): CalibrationResult {
   const margin = clampMargin(r.triggerMarginDb + deltaDb);

@@ -29,6 +29,7 @@ export interface DetectParams {
   snoreConfirmBursts: number;  // this many matching bursts in a row confirm a snore episode
   snoreEndSec: number;         // no matching burst for this long -> the episode ends
   audioBudgetSec: number;      // max seconds of audio stored per night (~230 MB)
+  testMarginOffsetDb: number;  // test mode: trigger margin is lowered by this much (clamped to 6 dB)
 }
 
 // Background in a quiet iPhone bedroom measured about -66..-70 dBFS in M2;
@@ -56,6 +57,7 @@ export const DEFAULT_PARAMS: DetectParams = Object.freeze({
   snoreConfirmBursts: 4,
   snoreEndSec: 15,
   audioBudgetSec: 7200,
+  testMarginOffsetDb: 3,
 });
 
 /** 把秒數換成幀數，四捨五入，至少 1。 */

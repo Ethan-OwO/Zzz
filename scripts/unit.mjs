@@ -6,7 +6,7 @@ import { Resampler } from '../src/audio/resampler.ts';
 import { DEFAULT_PARAMS, FRAME_SEC, secToFrames } from '../src/detect/params.ts';
 import { FloorTracker, dequantizeDb, quantizeDb } from '../src/detect/levels.ts';
 import { LowPass } from '../src/detect/bands.ts';
-import { adjustMargin, computeCalibration } from '../src/detect/calibrate.ts';
+import { adjustMargin, computeCalibration, effectiveMargins } from '../src/detect/calibrate.ts';
 import { SnoreTracker } from '../src/detect/snore.ts';
 import { Detector } from '../src/detect/detector.ts';
 import { Int16Ring } from '../src/record/ring.ts';
@@ -185,6 +185,15 @@ const fill = (n, db) => new Array(n).fill(db);
 {
   const r = adjustMargin(computeCalibration(qArr(fill(900, -60)), qArr(fill(300, -28)), P), 20, P);
   check('U-C4 adjustMargin +20 clamps at 20', r.triggerMarginDb === 20 && r.releaseMarginDb === 16, JSON.stringify(r));
+}
+
+{
+  const r = computeCalibration(qArr(fill(900, -60)), qArr(fill(300, -28)), P);
+  const f = effectiveMargins(r, 'formal', P);
+  const t = effectiveMargins(r, 'test', P);
+  const low = effectiveMargins(adjustMargin(r, -20, P), 'test', P);
+  check('effectiveMargins: formal = calibrated, test = -3 dB, never below 6', f.trigger === 16 && f.release === 12 &&
+    t.trigger === 13 && t.release === 9 && low.trigger === 6, JSON.stringify({ f, t, low }));
 }
 
 // ---------- M3: snore ----------
