@@ -1,5 +1,6 @@
 // AudioWorkletProcessor 'zzz-capture': downsamples channel 0 to 16 kHz, cuts
-// it into 512-sample frames and posts per-second volume statistics.
+// it into 512-sample frames and posts per-second volume statistics plus that
+// second's 16 kHz PCM as Int16 (transferred, so nothing is copied).
 import type { WorkletStats } from '../monitor/types';
 import { FRAME_SIZE, isZeroFrame, meanSquare } from './features';
 import { Resampler } from './resampler';
@@ -18,6 +19,10 @@ class CaptureProcessor extends AudioWorkletProcessor {
   private minMs = Infinity;
   private maxMs = -Infinity;
   private sumMs = 0;
+  // About one second of 16 kHz audio plus headroom; grown if a period is longer.
+  private pcmCap = (Math.ceil((this.quantaPerReport * 128 * OUT_RATE) / sampleRate / FRAME_SIZE) + 2) * FRAME_SIZE;
+  private pcm = new Int16Array(this.pcmCap);
+  private pcmLen = 0;
 
   process(inputs: Float32Array[][]): boolean {
     const channel = inputs[0]?.[0];
@@ -35,6 +40,7 @@ class CaptureProcessor extends AudioWorkletProcessor {
           if (ms < this.minMs) this.minMs = ms;
           if (ms > this.maxMs) this.maxMs = ms;
           this.sumMs += ms;
+          this.appendPcm();
         }
       }
     }
@@ -49,8 +55,12 @@ class CaptureProcessor extends AudioWorkletProcessor {
         maxMs: this.frames > 0 ? this.maxMs : null,
         sumMs: this.sumMs,
         ctxTime: currentTime,
+        pcm: new Int16Array(this.pcm.buffer, 0, this.pcmLen),
       };
-      this.port.postMessage(stats);
+      this.port.postMessage(stats, [this.pcm.buffer]);
+      // The transferred buffer is detached; one allocation per second is fine.
+      this.pcm = new Int16Array(this.pcmCap);
+      this.pcmLen = 0;
       this.quanta = 0;
       this.frames = 0;
       this.zeroFrames = 0;
@@ -60,6 +70,21 @@ class CaptureProcessor extends AudioWorkletProcessor {
       this.sumMs = 0;
     }
     return true;
+  }
+
+  private appendPcm(): void {
+    if (this.pcmLen + FRAME_SIZE > this.pcm.length) {
+      this.pcmCap = this.pcm.length * 2;
+      const grown = new Int16Array(this.pcmCap);
+      grown.set(this.pcm.subarray(0, this.pcmLen));
+      this.pcm = grown;
+    }
+    const f = this.frame;
+    for (let i = 0; i < FRAME_SIZE; i++) {
+      const v = Math.round(f[i]! * 32767);
+      this.pcm[this.pcmLen + i] = v > 32767 ? 32767 : v < -32768 ? -32768 : v;
+    }
+    this.pcmLen += FRAME_SIZE;
   }
 }
 

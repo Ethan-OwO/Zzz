@@ -1,9 +1,12 @@
 import { AudioCapture, errText } from '../audio/capture';
-import { startMotion } from '../motion/index';
-import { addEvents, addHeartbeat, putSession } from '../storage/db';
+import { LowPass, computeFeatures } from '../detect/bands.ts';
+import { DEFAULT_PARAMS, FRAME_SIZE, SAMPLE_RATE } from '../detect/params.ts';
+import { Recorder } from '../record/recorder';
+import type { RecorderStatus } from '../record/recorder';
+import { addEvents, addHeartbeat, getNightData, putNight, putSession } from '../storage/db';
 import { StatsAccumulator, startTicker } from './heartbeat';
 import type {
-  CtxState, HeartbeatRecord, MonitorEvent, MonitorEventType, SessionRecord, WakeLockStatus,
+  CtxState, WorkletStats, HeartbeatRecord, MonitorEvent, MonitorEventType, NightRecord, SessionRecord, WakeLockStatus,
 } from './types';
 import { ScreenWakeLock } from './wake-lock';
 
@@ -12,12 +15,25 @@ export interface LiveStatus {
   ctxState: CtxState; wakeLock: WakeLockStatus; needsGesture: boolean;
 }
 
+export type CalibrationListener = (q: number, zero: boolean) => void;
+
 export interface RunningSession {
   readonly id: string;
+  readonly nightId: string;
   /** 只在使用者點擊恢復浮層時呼叫(在 gesture 內)。 */
   recoverFromGesture(): void;
-  stop(): Promise<SessionRecord>;
+  /** 校準階段：每幀的量化 dB 與 zero 旗標。設為 null 後不再呼叫。 */
+  setCalibrationListener(fn: CalibrationListener | null): void;
+  /** 校準結束，開始偵測與錄音。seedFloor = 校準第 1 步的量化 dB(恢復的 session 為 null,重新暖機)。 */
+  beginDetection(night: NightRecord, seedFloor: Uint8Array | null): Promise<void>;
+  /** 停止 recorder 與麥克風;night 不為 null 時標記為 stopped。 */
+  stop(night?: NightRecord | null): Promise<SessionRecord>;
 }
+
+/** M2 interruption signals that also end the current sound event (design_M3 §5 session). */
+const GAP_EVENTS: ReadonlySet<MonitorEventType> = new Set<MonitorEventType>([
+  'timer-gap', 'track-mute', 'track-ended', 'recovery-attempt',
+]);
 
 interface AudioSessionLike extends EventTarget {
   readonly state?: string;
@@ -42,15 +58,16 @@ const WAKE_LOCK_RETRY_MS = [5000, 30000];
  * dropped on failure.
  */
 export async function startSession(opts: {
-  scenario: string;
+  nightId: string;
   heartbeatIntervalSec: number;
-  onLiveStatus: (s: LiveStatus) => void;
+  onLiveStatus: (s: LiveStatus & { recorder: RecorderStatus | null }) => void;
 }): Promise<RunningSession> {
   const nav = navigator as NavigatorExtras;
   const id = crypto.randomUUID();
   const record: SessionRecord = {
     id,
-    scenario: opts.scenario,
+    nightId: opts.nightId,
+    scenario: 'night',
     startedAt: Date.now(),
     stoppedAt: null,
     heartbeatIntervalSec: opts.heartbeatIntervalSec,
@@ -90,10 +107,32 @@ export async function startSession(opts: {
     return chain;
   };
 
+  let recorder: Recorder | null = null;
+  let calListener: CalibrationListener | null = null;
+  const calLp = new LowPass(DEFAULT_PARAMS.snoreLowCutHz, SAMPLE_RATE);
+  const calScratch = new Float32Array(FRAME_SIZE);
+  let calFrame = 0;
+
   const logEvent = (type: MonitorEventType, detail: string) => {
     pendingEvents.push({ sessionId: id, t: Date.now(), type, detail });
     void flush();
+    if (recorder && !stopping && (GAP_EVENTS.has(type) || (type === 'ctx-state' && detail !== 'running'))) {
+      recorder.onGap(type);
+    }
     onStateEvent(type);
+  };
+
+  const onStats = (s: WorkletStats) => {
+    acc.add(s);
+    if (stopping || !s.pcm) return;
+    if (recorder) {
+      recorder.onPcm(s.pcm, s.ctxTime, Date.now());
+    } else if (calListener) {
+      for (let off = 0; off + FRAME_SIZE <= s.pcm.length; off += FRAME_SIZE) {
+        const f = computeFeatures(s.pcm, off, calFrame++, calLp, calScratch);
+        calListener(f.q, f.zero);
+      }
+    }
   };
 
   // ---------- audio, wake lock, stats ----------
@@ -104,7 +143,7 @@ export async function startSession(opts: {
   let wakeRetryTimer: ReturnType<typeof setTimeout> | undefined;
 
   // Start order matters (iOS user activation): all three calls happen before any await.
-  const capture = new AudioCapture((s) => acc.add(s), (type, detail) => logEvent(type, detail));
+  const capture = new AudioCapture(onStats, (type, detail) => logEvent(type, detail));
   const wakeLock = new ScreenWakeLock((type, detail) => logEvent(type, detail));
   const wakePromise = wakeLock.request();
   const capturePromise = capture.start();
@@ -186,9 +225,7 @@ export async function startSession(opts: {
   dbReady = true;
   const startedPerf = performance.now();
   await putSession(record);
-  logEvent('start', opts.scenario);
-  // Optional motion recording (M5); returns null on the nightstand and never throws.
-  const motion = startMotion(id);
+  logEvent('start', 'night');
 
   try {
     const persisted = navigator.storage?.persist ? await navigator.storage.persist() : null;
@@ -229,6 +266,8 @@ export async function startSession(opts: {
       trackMuted: track ? track.muted : null,
       audioSessionState: nav.audioSession?.state ?? null,
       battery: battery ? { level: battery.level, charging: battery.charging } : null,
+      floorDb: recorder ? recorder.status().snapshot.floorDb : null,
+      soundEventCount: recorder ? recorder.status().soundEventCount : 0,
     };
   };
 
@@ -249,6 +288,7 @@ export async function startSession(opts: {
       ctxState: capture.ctxState,
       wakeLock: wakeLock.status,
       needsGesture,
+      recorder: recorder ? recorder.status() : null,
     });
   }, 1000);
 
@@ -276,6 +316,25 @@ export async function startSession(opts: {
 
   return {
     id,
+    nightId: opts.nightId,
+    setCalibrationListener(fn: CalibrationListener | null): void {
+      calListener = fn;
+    },
+    async beginDetection(night: NightRecord, seedFloor: Uint8Array | null): Promise<void> {
+      if (recorder || stopping) return;
+      calListener = null;
+      // Counts from earlier sessions of a resumed night.
+      const prior = await getNightData(night.id).catch(() => null);
+      const priorEventCount = prior ? prior.soundEvents.filter((e) => e.continuesFrom === null).length : 0;
+      const priorSnoreCount = prior ? prior.snoreEpisodes.length : 0;
+      if (stopping) return;
+      recorder = new Recorder(night, id, night.params, {
+        onError: (detail) => logEvent('error', detail),
+        priorEventCount,
+        priorSnoreCount,
+        seedFloor,
+      });
+    },
     recoverFromGesture(): void {
       // Inside the tap: start both before any await so user activation applies.
       void capture.resumeContext();
@@ -284,8 +343,16 @@ export async function startSession(opts: {
         if (ok) needsGesture = false;
       });
     },
-    async stop(): Promise<SessionRecord> {
+    async stop(night?: NightRecord | null): Promise<SessionRecord> {
       stopping = true;
+      calListener = null;
+      if (recorder) {
+        try {
+          await recorder.finish();
+        } catch (err) {
+          pendingEvents.push({ sessionId: id, t: Date.now(), type: 'error', detail: `recorder finish ${errText(err)}` });
+        }
+      }
       stopTicker();
       clearInterval(liveTimer);
       clearTimeout(wakeRetryTimer);
@@ -298,6 +365,11 @@ export async function startSession(opts: {
       record.stoppedAt = Date.now();
       await flush();
       await putSession(record);
+      if (night) {
+        night.status = 'stopped';
+        night.stoppedAt = record.stoppedAt;
+        await putNight({ ...night });
+      }
       return { ...record };
     },
   };

@@ -1,151 +1,105 @@
 import { renderEnvCheckTable, runEnvChecks } from '../env-check';
 import { buildExport, downloadExport } from '../export/json-export';
-import type { LiveStatus, RunningSession } from '../monitor/session';
-import { startSession } from '../monitor/session';
-import { renderPlacementPicker } from '../motion/index';
-import { deleteAll, listSessions } from '../storage/db';
+import { deleteLegacySessions, deleteNight, listLegacySessions, listNights, putNight } from '../storage/db';
+import type { Nav } from './app';
+import { beginSession, button, el, errorParts, hhmm, newNight } from './app';
 import { createHoldButton } from './recording';
 
-const SCENARIOS: ReadonlyArray<[string, string]> = [
-  ['N1', '整晚'],
-  ['P0', '基準 10 分鐘'],
-  ['P1', '通知'],
-  ['P2', '來電'],
-  ['P3', '側鍵鎖屏'],
-  ['P4', '切到別的 App'],
-  ['P5', '拔充電線'],
-  ['P6', '低耗電模式'],
-  ['P7', '控制中心與通知中心'],
-  ['P8', '鬧鐘響'],
-  ['P9', '睡眠專注模式'],
-  ['X', '其他'],
-];
-
-export interface HomeNav {
-  /** Called once the session is running; the returned updater receives live status every second. */
-  onStarted: (session: RunningSession) => (s: LiveStatus) => void;
-}
-
-/** `?hb=<seconds>` (integer 1–60) overrides the heartbeat interval; used by pnpm check only. */
-function heartbeatIntervalSec(): number {
-  const raw = new URLSearchParams(location.search).get('hb');
-  if (raw === null || !/^\d+$/.test(raw)) return 60;
-  const n = Number(raw);
-  return n >= 1 && n <= 60 ? n : 60;
-}
-
 export function textButton(label: string, onClick: () => void): HTMLButtonElement {
-  const b = document.createElement('button');
-  b.type = 'button';
-  b.className = 'text-button';
-  b.textContent = label;
-  b.addEventListener('click', onClick);
-  return b;
+  return button(label, 'text-button', onClick);
 }
 
-export function renderHome(root: HTMLElement, opts: { error?: string; errorName?: string } & HomeNav): void {
-  const title = document.createElement('h1');
-  title.textContent = 'Zzz';
-
-  const label = document.createElement('label');
-  label.className = 'scenario';
-  const labelText = document.createElement('span');
-  labelText.textContent = '測試情境';
-  const select = document.createElement('select');
-  for (const [value, text] of SCENARIOS) {
-    const option = document.createElement('option');
-    option.value = value;
-    option.textContent = `${value} ${text}`;
-    select.append(option);
-  }
-  select.value = 'N1';
-  label.append(labelText, select);
-
-  const startButton = document.createElement('button');
-  startButton.type = 'button';
-  startButton.className = 'start-button';
-  startButton.textContent = '開始';
-
-  const placement = document.createElement('div');
-  renderPlacementPicker(placement);
-
-  root.append(title, label, placement, startButton);
+export function renderHome(root: HTMLElement, nav: Nav, opts: { error?: string; errorName?: string } = {}): void {
+  root.append(el('h1', undefined, 'Zzz'));
+  const main = el('section', 'home-main');
+  root.append(main);
 
   if (opts.error) {
-    const err = document.createElement('p');
-    err.className = 'error';
-    err.textContent = `無法開始：${opts.error}`;
-    root.append(err);
-    if (opts.errorName === 'NotAllowedError') {
-      const hint = document.createElement('p');
-      hint.className = 'error';
-      hint.textContent = '請到 設定 → Safari → 麥克風 允許此網站';
-      root.append(hint);
-    }
+    root.append(el('p', 'error', `無法開始：${opts.error}`));
+    if (opts.errorName === 'NotAllowedError') root.append(el('p', 'error', '請到 設定 → Safari → 麥克風 允許此網站'));
   }
 
-  let starting = false;
-  let update: ((s: LiveStatus) => void) | null = null;
-  startButton.addEventListener('click', () => {
-    if (starting) return;
-    starting = true;
-    startButton.disabled = true;
+  const legacy = el('section', 'stored');
+  root.append(legacy);
+  void renderLegacy(legacy);
+
+  const results = el('section', 'results');
+  root.append(textButton('環境檢查', () => renderEnvCheckTable(runEnvChecks(), results)), results);
+
+  void renderMain(root, main, nav);
+}
+
+async function renderMain(root: HTMLElement, main: HTMLElement, nav: Nav): Promise<void> {
+  let nights;
+  try {
+    nights = await listNights();
+  } catch (err) {
+    main.append(el('p', 'error', `無法讀取紀錄：${errorParts(err).message}`));
+    return;
+  }
+  const unfinished = nights.find((n) => n.status !== 'stopped');
+  if (unfinished) {
+    nav.recovery(unfinished);
+    return;
+  }
+  const last = nights[nights.length - 1];
+  if (last) {
+    // One night at a time: the previous night must be deleted before a new one starts.
+    main.append(
+      el('p', undefined, '上一晚的紀錄還在'),
+      el('p', 'muted', `${new Date(last.startedAt).toLocaleDateString()} ${hhmm(last.startedAt)} 開始`),
+    );
+    const actions = el('div', 'actions');
+    actions.append(
+      button('查看', 'secondary-button', () => nav.result(last.id)),
+      createHoldButton('長按 2 秒刪除這一晚', 2000, () => {
+        void deleteNight(last.id).then(() => {
+          root.replaceChildren();
+          renderHome(root, nav);
+        });
+      }),
+    );
+    main.append(actions);
+    return;
+  }
+
+  const start = button('開始', 'start-button', () => {
+    if (start.disabled) return;
+    start.disabled = true;
+    const night = newNight();
     // Called synchronously inside the click so iOS user activation still applies.
-    startSession({
-      scenario: select.value,
-      heartbeatIntervalSec: heartbeatIntervalSec(),
-      onLiveStatus: (s) => update?.(s),
-    }).then(
-      (session) => {
-        update = opts.onStarted(session);
-      },
+    const sessionPromise = beginSession(night.id);
+    const saved = putNight(night);
+    Promise.all([sessionPromise, saved]).then(
+      ([session]) => nav.calibrate(session, night),
       (err: unknown) => {
-        const name = err instanceof Error || err instanceof DOMException ? err.name : 'Error';
-        const message = err instanceof Error || err instanceof DOMException ? err.message : String(err);
-        root.replaceChildren();
-        renderHome(root, { ...opts, error: `${name}: ${message}`, errorName: name });
+        const { name, message } = errorParts(err);
+        void sessionPromise.then((s) => s.stop(), () => {});
+        void saved.then(() => deleteNight(night.id), () => {}).finally(() => {
+          nav.home({ error: `${name}: ${message}`, errorName: name });
+        });
       },
     );
   });
-
-  const stored = document.createElement('section');
-  stored.className = 'stored';
-  root.append(stored);
-  void renderStored(root, stored, opts);
-
-  const envButton = textButton('環境檢查', () => {
-    renderEnvCheckTable(runEnvChecks(), results);
-  });
-  const results = document.createElement('section');
-  results.className = 'results';
-  root.append(envButton, results);
+  main.append(start);
 }
 
-async function renderStored(root: HTMLElement, container: HTMLElement, opts: HomeNav): Promise<void> {
+async function renderLegacy(container: HTMLElement): Promise<void> {
   let count = 0;
   try {
-    count = (await listSessions()).length;
+    count = (await listLegacySessions()).length;
   } catch {
     return;
   }
   if (count === 0) return;
-  const p = document.createElement('p');
-  p.textContent = `已存的測試紀錄：${count} 筆`;
-  const download = document.createElement('button');
-  download.type = 'button';
-  download.className = 'secondary-button';
-  download.textContent = '下載全部 JSON';
-  download.addEventListener('click', () => {
-    void buildExport().then(downloadExport);
-  });
-  const del = createHoldButton('刪除全部', 2000, () => {
-    void deleteAll().then(() => {
-      root.replaceChildren();
-      renderHome(root, opts);
-    });
-  });
-  const actions = document.createElement('div');
-  actions.className = 'actions';
-  actions.append(download, del);
-  container.replaceChildren(p, actions);
+  const actions = el('div', 'actions');
+  actions.append(
+    button('下載 JSON', 'secondary-button', () => {
+      void buildExport().then(downloadExport);
+    }),
+    createHoldButton('長按刪除舊紀錄', 2000, () => {
+      void deleteLegacySessions().then(() => container.replaceChildren());
+    }),
+  );
+  container.replaceChildren(el('p', 'muted', `舊的測試紀錄：${count} 筆`), actions);
 }
