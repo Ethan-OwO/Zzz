@@ -1,4 +1,5 @@
 import type { HeartbeatRecord, MonitorEvent, SessionRecord } from '../monitor/types';
+import { deleteAllMotion } from '../motion/index';
 
 const DB_NAME = 'zzz';
 const DB_VERSION = 1;
@@ -103,10 +104,11 @@ export async function getSessionData(id: string): Promise<{ heartbeats: Heartbea
   return { heartbeats, events };
 }
 
-export function deleteAll(): Promise<void> {
-  return write(['sessions', 'heartbeats', 'events'], (tx) => {
+export async function deleteAll(): Promise<void> {
+  await write(['sessions', 'heartbeats', 'events'], (tx) => {
     tx.objectStore('sessions').clear();
     tx.objectStore('heartbeats').clear();
     tx.objectStore('events').clear();
   });
+  await deleteAllMotion();
 }

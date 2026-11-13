@@ -1,5 +1,6 @@
 import { buildExport, downloadExport } from '../export/json-export';
 import type { SessionRecord } from '../monitor/types';
+import { motionSummary } from '../motion/index';
 import { deleteAll, getSessionData } from '../storage/db';
 import { createHoldButton } from './recording';
 
@@ -36,6 +37,7 @@ export async function renderResult(root: HTMLElement, session: SessionRecord, on
     ['timer-gap', 'gaps', `${gaps.length} 次，共 ${(gapTotal / 1000).toFixed(1)} 秒`],
     ['recovery-failed', 'recovery-failed', `${failures} 次`],
     ['取樣率', 'sample-rate', session.ctxSampleRate === null ? '–' : `${session.ctxSampleRate} Hz`],
+    ['動作', 'motion', await motionSummary(session.id)],
   ];
   for (const [label, field, value] of rows) {
     const dt = document.createElement('dt');

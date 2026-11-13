@@ -1,4 +1,5 @@
 import { AudioCapture, errText } from '../audio/capture';
+import { startMotion } from '../motion/index';
 import { addEvents, addHeartbeat, putSession } from '../storage/db';
 import { StatsAccumulator, startTicker } from './heartbeat';
 import type {
@@ -186,6 +187,8 @@ export async function startSession(opts: {
   const startedPerf = performance.now();
   await putSession(record);
   logEvent('start', opts.scenario);
+  // Optional motion recording (M5); returns null on the nightstand and never throws.
+  const motion = startMotion(id);
 
   try {
     const persisted = navigator.storage?.persist ? await navigator.storage.persist() : null;
@@ -289,6 +292,7 @@ export async function startSession(opts: {
       for (const [target, name, fn] of listeners) target.removeEventListener(name, fn);
       pendingHeartbeats.push(makeHeartbeat());
       logEvent('stop', '');
+      await motion?.stop();
       await capture.stop();
       await wakeLock.release();
       record.stoppedAt = Date.now();

@@ -1,5 +1,6 @@
 import type { LiveStatus, RunningSession } from '../monitor/session';
 import type { SessionRecord } from '../monitor/types';
+import { motionLive } from '../motion/index';
 
 const OVERLAY_MS = 10_000;
 
@@ -73,6 +74,7 @@ export function renderRecording(
   const db = row(list, '最近音量', 'db');
   const ctx = row(list, 'AudioContext', 'ctx');
   const wake = row(list, 'Wake lock', 'wakelock');
+  const motion = row(list, '動作', 'motion');
 
   let stopping = false;
   const stopButton = createHoldButton('長按 2 秒停止', 2000, () => {
@@ -114,6 +116,10 @@ export function renderRecording(
       db.textContent = s.lastDb === null ? '–' : `${s.lastDb.toFixed(1)} dB`;
       ctx.textContent = s.ctxState;
       wake.textContent = s.wakeLock;
+      const m = motionLive();
+      motion.textContent = !m ? '—'
+        : m.rateHz === null ? '等待第一個區間'
+        : `${m.rateHz.toFixed(0)} Hz · 上個區間動 ${m.lastActiveSec ?? 0} 秒`;
       if (s.needsGesture !== needsGesture) {
         needsGesture = s.needsGesture;
         recover.hidden = !needsGesture;

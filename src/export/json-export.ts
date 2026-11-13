@@ -1,10 +1,13 @@
 import type { HeartbeatRecord, MonitorEvent, SessionRecord } from '../monitor/types';
+import { exportMotion, type MotionSessionData } from '../motion/index';
 import { getSessionData, listSessions } from '../storage/db';
 
 export interface ExportFile {
   schema: 'zzz-m2/1';
   exportedAt: number;
   sessions: Array<SessionRecord & { heartbeats: HeartbeatRecord[]; events: MonitorEvent[] }>;
+  /** M5 motion sessions with their 30 s epochs; empty when the phone was never on the bed. */
+  motion: MotionSessionData[];
 }
 
 /** 讀出所有 session 與其心跳、事件，組成 ExportFile。 */
@@ -15,7 +18,7 @@ export async function buildExport(): Promise<ExportFile> {
     const { heartbeats, events } = await getSessionData(s.id);
     out.push({ ...s, heartbeats, events });
   }
-  return { schema: 'zzz-m2/1', exportedAt: Date.now(), sessions: out };
+  return { schema: 'zzz-m2/1', exportedAt: Date.now(), sessions: out, motion: await exportMotion() };
 }
 
 function pad(n: number): string {

@@ -2,6 +2,7 @@ import { renderEnvCheckTable, runEnvChecks } from '../env-check';
 import { buildExport, downloadExport } from '../export/json-export';
 import type { LiveStatus, RunningSession } from '../monitor/session';
 import { startSession } from '../monitor/session';
+import { renderPlacementPicker } from '../motion/index';
 import { deleteAll, listSessions } from '../storage/db';
 import { createHoldButton } from './recording';
 
@@ -65,7 +66,10 @@ export function renderHome(root: HTMLElement, opts: { error?: string; errorName?
   startButton.className = 'start-button';
   startButton.textContent = '開始';
 
-  root.append(title, label, startButton);
+  const placement = document.createElement('div');
+  renderPlacementPicker(placement);
+
+  root.append(title, label, placement, startButton);
 
   if (opts.error) {
     const err = document.createElement('p');
