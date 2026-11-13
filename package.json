@@ -1,0 +1,22 @@
+{
+  "name": "zzz",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "vite --host",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host",
+    "check": "pnpm build && node scripts/check.mjs"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-basic-ssl": "^2.3.0",
+    "playwright": "1.63.0",
+    "typescript": "~7.0.2",
+    "vite": "^8.3.8"
+  }
+}
