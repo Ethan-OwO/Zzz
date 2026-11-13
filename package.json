@@ -11,7 +11,7 @@
     "dev": "vite --host",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host",
-    "check": "pnpm build && node scripts/check.mjs"
+    "check": "pnpm build && node scripts/unit.mjs && node scripts/check.mjs"
   },
   "devDependencies": {
     "@vitejs/plugin-basic-ssl": "^2.3.0",
