@@ -1,6 +1,9 @@
 // All record shapes stored in IndexedDB and exported as JSON.
 import type { CalibrationResult } from '../detect/calibrate.ts';
 import type { DetectParams } from '../detect/params.ts';
+import type { EventFeatures } from '../classify/event-features.ts';
+import type { UserLabel } from '../classify/evaluate.ts';
+import type { Classification } from '../classify/rules.ts';
 
 export type CtxState = 'suspended' | 'running' | 'closed' | 'interrupted' | 'unknown';
 export type WakeLockStatus = 'unsupported' | 'held' | 'released' | 'error';
@@ -80,6 +83,7 @@ export interface NightRecord {
   audioSecUsed: number;
   paramsVersion: 1;
   params: DetectParams;               // 當晚使用的參數全文，方便之後調校對照
+  jsonDownloadedAt?: number | null;   // M4: last debug JSON download
 }
 
 export interface SoundEventRecord {
@@ -94,6 +98,12 @@ export interface SoundEventRecord {
   sampleCount: number;                       // 已寫入的樣本數
   snoreEpisodeId: string | null;             // 是某段打呼的樣本
   snoreLike: boolean;                        // 只有 test 模式時可能為 true
+  // M4 (all optional: records written before M4 T2 have none of them)
+  features?: EventFeatures | null;
+  classification?: Classification | null;
+  userLabel?: UserLabel | null;
+  labeledAt?: number | null;
+  audioDroppedAs?: 'snore' | null;           // formal mode: audio deleted after classification
 }
 
 export interface AudioChunkRecord {
@@ -109,4 +119,9 @@ export interface SnoreEpisodeRecord {
   medianIntervalSec: number;
   meanPeakDb: number; meanLowRatio: number;
   endReason: 'quiet' | 'gap' | 'stopped' | 'recovered' | null;
+  // M4: did the user, after hearing the sample, judge this a real snore episode?
+  userLabel?: EpisodeLabel | null;
+  labeledAt?: number | null;
 }
+
+export type EpisodeLabel = 'snore' | 'not-snore' | 'unsure';
