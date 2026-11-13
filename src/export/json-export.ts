@@ -2,6 +2,7 @@ import type {
   HeartbeatRecord, MonitorEvent, NightRecord, SessionRecord, SnoreEpisodeRecord, SoundEventRecord,
 } from '../monitor/types';
 import { getNight, getNightData, getSessionData, listLegacySessions } from '../storage/db';
+import { exportMotion, type MotionSessionData } from '../motion/index';
 
 export interface ExportFile {
   schema: 'zzz-m2/1';
@@ -27,6 +28,8 @@ export interface ExportFileM3 {
     sessions: Array<SessionRecord & { heartbeats: HeartbeatRecord[]; events: MonitorEvent[] }>;
     soundEvents: SoundEventRecord[];
     snoreEpisodes: SnoreEpisodeRecord[];
+    /** M5 motion sessions with their 30 s epochs; empty when the phone was on the nightstand. */
+    motion: MotionSessionData[];
   }>;
 }
 
@@ -38,7 +41,8 @@ export async function buildNightExport(nightId: string): Promise<ExportFileM3> {
     const { sessions, soundEvents, snoreEpisodes } = await getNightData(nightId);
     const withData = [];
     for (const s of sessions) withData.push({ ...s, ...(await getSessionData(s.id)) });
-    nights.push({ ...night, sessions: withData, soundEvents, snoreEpisodes });
+    const motion = await exportMotion(sessions.map((s) => s.id));
+    nights.push({ ...night, sessions: withData, soundEvents, snoreEpisodes, motion });
   }
   return { schema: 'zzz-m3/1', exportedAt: Date.now(), nights };
 }

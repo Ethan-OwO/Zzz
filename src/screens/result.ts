@@ -1,6 +1,7 @@
 // M3 result: summary + time line of sound events and snore episodes with playback.
 // M6 replaces this with the real report.
 import { buildNightExport, downloadExport } from '../export/json-export';
+import { motionSummary } from '../motion/index';
 import type { SnoreEpisodeRecord, SoundEventRecord } from '../monitor/types';
 import { deleteNight, getNight, getNightData, getSessionData, readEventAudio } from '../storage/db';
 import type { Nav } from './app';
@@ -96,6 +97,7 @@ export async function renderResult(root: HTMLElement, nightId: string, nav: Nav)
     ['校準', 'calibration', cal
       ? `背景 ${fmtDb(cal.floorDb)}、說話 ${cal.speechDb === null ? '–' : fmtDb(cal.speechDb)}、門檻 +${cal.triggerMarginDb.toFixed(1)} dB`
       : '–'],
+    ['動作', 'motion', await motionSummary(sessions.map((s) => s.id))],
     ['已用音訊', 'audio-sec', `${Math.round(night.audioSecUsed)} 秒`],
     ['儲存空間', 'storage', '–'],
   ];

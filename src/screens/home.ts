@@ -1,5 +1,6 @@
 import { renderEnvCheckTable, runEnvChecks } from '../env-check';
 import { buildExport, downloadExport } from '../export/json-export';
+import { renderPlacementPicker } from '../motion/index';
 import { deleteLegacySessions, deleteNight, listLegacySessions, listNights, putNight } from '../storage/db';
 import type { Nav } from './app';
 import { beginSession, button, el, errorParts, hhmm, newNight } from './app';
@@ -81,7 +82,9 @@ async function renderMain(root: HTMLElement, main: HTMLElement, nav: Nav): Promi
       },
     );
   });
-  main.append(start);
+  const placement = el('div');
+  renderPlacementPicker(placement);
+  main.append(placement, start);
 }
 
 async function renderLegacy(container: HTMLElement): Promise<void> {

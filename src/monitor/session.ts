@@ -1,6 +1,7 @@
 import { AudioCapture, errText } from '../audio/capture';
 import { LowPass, computeFeatures } from '../detect/bands.ts';
 import { DEFAULT_PARAMS, FRAME_SIZE, SAMPLE_RATE } from '../detect/params.ts';
+import { startMotion } from '../motion/index';
 import { Recorder } from '../record/recorder';
 import type { RecorderStatus } from '../record/recorder';
 import { addEvents, addHeartbeat, getNightData, putNight, putSession } from '../storage/db';
@@ -129,8 +130,11 @@ export async function startSession(opts: {
       recorder.onPcm(s.pcm, s.ctxTime, Date.now());
     } else if (calListener) {
       for (let off = 0; off + FRAME_SIZE <= s.pcm.length; off += FRAME_SIZE) {
+        // The listener may clear itself mid-batch when a calibration step ends.
+        const fn = calListener;
+        if (!fn) break;
         const f = computeFeatures(s.pcm, off, calFrame++, calLp, calScratch);
-        calListener(f.q, f.zero);
+        fn(f.q, f.zero);
       }
     }
   };
@@ -226,6 +230,8 @@ export async function startSession(opts: {
   const startedPerf = performance.now();
   await putSession(record);
   logEvent('start', 'night');
+  // Optional motion recording (M5); returns null on the nightstand and never throws.
+  const motion = startMotion(id);
 
   try {
     const persisted = navigator.storage?.persist ? await navigator.storage.persist() : null;
@@ -359,6 +365,7 @@ export async function startSession(opts: {
       for (const [target, name, fn] of listeners) target.removeEventListener(name, fn);
       pendingHeartbeats.push(makeHeartbeat());
       logEvent('stop', '');
+      await motion?.stop();
       await capture.stop();
       await wakeLock.release();
       record.stoppedAt = Date.now();

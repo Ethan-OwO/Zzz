@@ -1,6 +1,7 @@
 import type {
   AudioChunkRecord, HeartbeatRecord, MonitorEvent, NightRecord, SessionRecord, SnoreEpisodeRecord, SoundEventRecord,
 } from '../monitor/types';
+import { deleteAllMotion, deleteMotionForSessions } from '../motion/index';
 
 const DB_NAME = 'zzz';
 const DB_VERSION = 2;
@@ -115,12 +116,13 @@ export async function getSessionData(id: string): Promise<{ heartbeats: Heartbea
   return { heartbeats, events };
 }
 
-export function deleteAll(): Promise<void> {
-  return write(['sessions', 'heartbeats', 'events'], (tx) => {
+export async function deleteAll(): Promise<void> {
+  await write(['sessions', 'heartbeats', 'events'], (tx) => {
     tx.objectStore('sessions').clear();
     tx.objectStore('heartbeats').clear();
     tx.objectStore('events').clear();
   });
+  await deleteAllMotion();
 }
 
 // ---------- M3 ----------
@@ -238,6 +240,8 @@ function deleteSessionsIn(tx: IDBTransaction, sessionIds: IDBValidKey[]): void {
 /** 刪這一晚的 nights / sessions / heartbeats / events / soundEvents / chunks / snoreEpisodes。 */
 export async function deleteNight(nightId: string): Promise<void> {
   const db = await openDb();
+  // Motion lives in its own database (M5); collect this night's session ids first.
+  const sessionIds = (await getNightData(nightId)).sessions.map((s) => s.id);
   await new Promise<void>((resolve, reject) => {
     const stores: StoreName[] = ['nights', 'sessions', 'heartbeats', 'events', 'soundEvents', 'chunks', 'snoreEpisodes'];
     const tx = db.transaction(stores, 'readwrite', { durability: 'strict' });
@@ -259,6 +263,7 @@ export async function deleteNight(nightId: string): Promise<void> {
       for (const id of nr.result) tx.objectStore('snoreEpisodes').delete(id);
     };
   });
+  await deleteMotionForSessions(sessionIds);
 }
 
 /** nightId 為空的 M2 測試紀錄。 */
@@ -270,6 +275,7 @@ export async function deleteLegacySessions(): Promise<void> {
   const ids = (await listLegacySessions()).map((s) => s.id);
   if (ids.length === 0) return;
   await write(['sessions', 'heartbeats', 'events'], (tx) => deleteSessionsIn(tx, ids));
+  await deleteMotionForSessions(ids);
 }
 
 /** Latest heartbeat time of a session, or null when it has none. */
