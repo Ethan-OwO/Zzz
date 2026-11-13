@@ -10,6 +10,10 @@ import { adjustMargin, computeCalibration, effectiveMargins } from '../src/detec
 import { SnoreTracker } from '../src/detect/snore.ts';
 import { Detector } from '../src/detect/detector.ts';
 import { Int16Ring } from '../src/record/ring.ts';
+import { shouldDropSnoreAudio } from '../src/classify/drop.ts';
+import { DEFAULT_CLASSIFY_PARAMS } from '../src/classify/rules.ts';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 let failed = false;
 function check(name, cond, info = '') {
@@ -391,6 +395,35 @@ function snoreSim(insertAfter = -1, keep = false) {
   r.clear();
   check('Int16Ring wraps and clear() keeps the absolute index', JSON.stringify(wrap) === '[24,100,101,102]' &&
     r.read(0, 28).length === 0 && r.endIndex === 28 && r.oldestIndex === 28, JSON.stringify(wrap));
+}
+
+// ---------- M4 T2: formal-mode drop rule (design_M4 §5.13) ----------
+{
+  const C = (cls, confidence) => ({ cls, confidence, talkScore: 0, snoreScore: 0, reason: cls, classifierVersion: '1.1' });
+  const ev = (o) => ({ hasAudio: true, snoreEpisodeId: null, classification: null, userLabel: null, ...o });
+  const P = DEFAULT_CLASSIFY_PARAMS;
+  const cases = [
+    ['snore 0.85', ev({ classification: C('snore', 0.85) }), true],
+    ['snore 0.79', ev({ classification: C('snore', 0.79) }), false],
+    ['snore 0.8 exactly', ev({ classification: C('snore', 0.8) }), true],
+    ['talk 0.95', ev({ classification: C('talk', 0.95) }), false],
+    ['snore sample, other', ev({ snoreEpisodeId: 'x', classification: C('other', 0.5) }), true],
+    ['snore sample, unclassified', ev({ snoreEpisodeId: 'x' }), true],
+    ['snore 0.9 labeled talk', ev({ classification: C('snore', 0.9), userLabel: 'talk' }), false],
+    ['snore sample labeled other', ev({ snoreEpisodeId: 'x', userLabel: 'other' }), false],
+    ['snore 0.9 labeled unsure', ev({ classification: C('snore', 0.9), userLabel: 'unsure' }), true],
+    ['no audio', ev({ hasAudio: false, classification: C('snore', 0.9) }), false],
+  ];
+  const bad = cases.filter(([, e, want]) => shouldDropSnoreAudio(e, P) !== want).map(([n]) => n);
+  check('D1 shouldDropSnoreAudio: snore >= dropMinConfidence or sample, never labeled talk/other, never without audio',
+    bad.length === 0, bad.join(', '));
+  check('D2 dropMinConfidence 1.01 drops no classified snore', !shouldDropSnoreAudio(ev({ classification: C('snore', 1) }), { dropMinConfidence: 1.01 }));
+}
+
+// ---------- M4 T1: classifier unit tests (design_M4 §7.1) ----------
+{
+  const r = spawnSync(process.execPath, [fileURLToPath(new URL('./unit-classify.mjs', import.meta.url))], { stdio: 'inherit' });
+  check('unit-classify.mjs passes', r.status === 0, `exit ${r.status}`);
 }
 
 process.exit(failed ? 1 : 0);

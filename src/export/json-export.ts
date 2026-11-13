@@ -3,6 +3,9 @@ import type {
 } from '../monitor/types';
 import { getNight, getNightData, getSessionData, listLegacySessions } from '../storage/db';
 import { exportMotion, type MotionSessionData } from '../motion/index';
+import { FEATURES_VERSION } from '../classify/event-features';
+import { DEFAULT_CLASSIFY_PARAMS, type ClassifyParams } from '../classify/rules';
+import { classifyNight } from '../classify/run';
 
 export interface ExportFile {
   schema: 'zzz-m2/1';
@@ -21,22 +24,29 @@ export async function buildExport(): Promise<ExportFile> {
   return { schema: 'zzz-m2/1', exportedAt: Date.now(), sessions: out };
 }
 
-export interface ExportFileM3 {
-  schema: 'zzz-m3/1';
+export interface ExportFileM4 {
+  schema: 'zzz-m4/1';
   exportedAt: number;
+  /** The classifier the events' classification came from; eval-labels.mjs re-runs it with other values. */
+  classifyParams: ClassifyParams;
+  featuresVersion: number;
   nights: Array<NightRecord & {
     sessions: Array<SessionRecord & { heartbeats: HeartbeatRecord[]; events: MonitorEvent[] }>;
-    soundEvents: SoundEventRecord[];
-    snoreEpisodes: SnoreEpisodeRecord[];
+    soundEvents: SoundEventRecord[];      // M4: with features, classification, userLabel, audioDroppedAs
+    snoreEpisodes: SnoreEpisodeRecord[];  // M4: with userLabel
     /** M5 motion sessions with their 30 s epochs; empty when the phone was on the nightstand. */
     motion: MotionSessionData[];
   }>;
 }
 
-/** One night with its sessions, heartbeats, state events, sound events and snore episodes. No PCM. */
-export async function buildNightExport(nightId: string): Promise<ExportFileM3> {
+/**
+ * One night with its sessions, heartbeats, state events, sound events (with M4 features and
+ * labels) and snore episodes. No PCM. Classifies first so every event with audio has features.
+ */
+export async function buildNightExport(nightId: string): Promise<ExportFileM4> {
+  await classifyNight(nightId);
   const night = await getNight(nightId);
-  const nights: ExportFileM3['nights'] = [];
+  const nights: ExportFileM4['nights'] = [];
   if (night) {
     const { sessions, soundEvents, snoreEpisodes } = await getNightData(nightId);
     const withData = [];
@@ -44,7 +54,10 @@ export async function buildNightExport(nightId: string): Promise<ExportFileM3> {
     const motion = await exportMotion(sessions.map((s) => s.id));
     nights.push({ ...night, sessions: withData, soundEvents, snoreEpisodes, motion });
   }
-  return { schema: 'zzz-m3/1', exportedAt: Date.now(), nights };
+  return {
+    schema: 'zzz-m4/1', exportedAt: Date.now(),
+    classifyParams: DEFAULT_CLASSIFY_PARAMS, featuresVersion: FEATURES_VERSION, nights,
+  };
 }
 
 function pad(n: number): string {
@@ -57,12 +70,12 @@ function fileName(prefix: string, d: Date): string {
 }
 
 /** Blob(application/json) + URL.createObjectURL + 暫時的 <a download> 點擊，之後 revokeObjectURL。 */
-export function downloadExport(file: ExportFile | ExportFileM3): void {
+export function downloadExport(file: ExportFile | ExportFileM4): void {
   const blob = new Blob([JSON.stringify(file, null, 1)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = fileName(file.schema === 'zzz-m3/1' ? 'm3' : 'm2', new Date());
+  a.download = fileName(file.schema === 'zzz-m4/1' ? 'm4' : 'm2', new Date());
   a.hidden = true;
   document.body.append(a);
   a.click();

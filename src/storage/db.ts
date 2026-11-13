@@ -1,5 +1,9 @@
+import type { EventFeatures } from '../classify/event-features';
+import type { UserLabel } from '../classify/evaluate';
+import type { Classification } from '../classify/rules';
 import type {
-  AudioChunkRecord, HeartbeatRecord, MonitorEvent, NightRecord, SessionRecord, SnoreEpisodeRecord, SoundEventRecord,
+  AudioChunkRecord, EpisodeLabel, HeartbeatRecord, MonitorEvent, NightRecord, SessionRecord, SnoreEpisodeRecord,
+  SoundEventRecord,
 } from '../monitor/types';
 import { deleteAllMotion, deleteMotionForSessions } from '../motion/index';
 
@@ -219,6 +223,66 @@ export function dropEventAudio(e: SoundEventRecord, n: NightRecord): Promise<voi
     tx.objectStore('soundEvents').put(e);
     tx.objectStore('nights').put(n);
   });
+}
+
+// ---------- M4 ----------
+
+/**
+ * Read one record, change only the given fields, put it back, all in one readwrite transaction.
+ * A missing record is left missing. Other fields written meanwhile by someone else are kept,
+ * because the read happens inside the same transaction as the write.
+ */
+function patch<T>(store: 'soundEvents' | 'snoreEpisodes' | 'nights', id: string, fn: (r: T) => void,
+  extra?: (tx: IDBTransaction) => void, stores: StoreName[] = [store]): Promise<void> {
+  return write(stores, (tx) => {
+    const os = tx.objectStore(store);
+    const r = os.get(id) as IDBRequest<T | undefined>;
+    r.onsuccess = () => {
+      if (r.result === undefined) return;
+      fn(r.result);
+      os.put(r.result);
+      extra?.(tx);
+    };
+  });
+}
+
+export function setEventClassification(eventId: string, features: EventFeatures | null, c: Classification): Promise<void> {
+  return patch<SoundEventRecord>('soundEvents', eventId, (e) => {
+    e.features = features;
+    e.classification = c;
+  });
+}
+
+export function setEventLabel(eventId: string, label: UserLabel | null): Promise<void> {
+  return patch<SoundEventRecord>('soundEvents', eventId, (e) => {
+    e.userLabel = label;
+    e.labeledAt = Date.now();
+  });
+}
+
+export function setEpisodeLabel(episodeId: string, label: EpisodeLabel | null): Promise<void> {
+  return patch<SnoreEpisodeRecord>('snoreEpisodes', episodeId, (e) => {
+    e.userLabel = label;
+    e.labeledAt = Date.now();
+  });
+}
+
+export function markJsonDownloaded(nightId: string): Promise<void> {
+  return patch<NightRecord>('nights', nightId, (n) => {
+    n.jsonDownloadedAt = Date.now();
+  });
+}
+
+/**
+ * Formal mode, after classification: delete all chunks of the event, keep its times and numbers.
+ * audioSecUsed of the night is not given back (the budget counts what was recorded).
+ */
+export function deleteEventAudio(eventId: string): Promise<void> {
+  return patch<SoundEventRecord>('soundEvents', eventId, (e) => {
+    e.hasAudio = false;
+    e.sampleCount = 0;
+    e.audioDroppedAs = 'snore';
+  }, (tx) => tx.objectStore('chunks').delete(chunkRange(eventId)), ['soundEvents', 'chunks']);
 }
 
 /** Deletes sessions (with their heartbeats and events) inside an open transaction. */
