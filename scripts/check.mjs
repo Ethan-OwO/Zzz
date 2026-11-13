@@ -1,7 +1,10 @@
-// Local verification (M1 + M2): static checks on dist/, then serve dist/ with the
-// headers from dist/_headers and drive it with Playwright Chromium.
+// Local verification (M1–M3): static checks on dist/, then serve dist/ with the
+// headers from dist/_headers and drive it with Playwright Chromium, using a
+// synthetic WAV (scripts/make-fixture.mjs) as the microphone.
 import { createServer } from 'node:http';
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { existsSync } from 'node:fs';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -152,7 +155,10 @@ const baseUrl = `http://127.0.0.1:${port}/`;
 
 // ---------- 3. Browser checks ----------
 
-const FILE_RE = /^zzz-m2-\d{8}-\d{4}\.json$/;
+const FILE_RE = /^zzz-m3-\d{8}-\d{4}\.json$/;
+const fixtureDir = await mkdtemp(join(tmpdir(), 'zzz-fixture-'));
+const fixturePath = join(fixtureDir, 'mic.wav');
+execFileSync(process.execPath, [fileURLToPath(new URL('./make-fixture.mjs', import.meta.url)), fixturePath]);
 
 /** Long-press (or short-press) the button: mouse down, wait, mouse up. */
 async function press(page, locator, ms) {
@@ -167,15 +173,90 @@ async function press(page, locator, ms) {
 async function downloadJson(page, button) {
   const [download] = await Promise.all([page.waitForEvent('download', { timeout: 5000 }), button.click()]);
   const name = download.suggestedFilename();
-  const path = await download.path();
-  const text = await readFile(path, 'utf8');
+  const text = await readFile(await download.path(), 'utf8');
   return { name, text, json: JSON.parse(text) };
+}
+
+/** Reads every M3 store (chunks only as eventId/seq/length) straight from IndexedDB. */
+function readDb(page) {
+  return page.evaluate(async () => {
+    const db = await new Promise((res, rej) => {
+      const r = indexedDB.open('zzz');
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    });
+    const all = (name) => new Promise((res, rej) => {
+      const r = db.transaction(name, 'readonly').objectStore(name).getAll();
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    });
+    const [nights, sessions, soundEvents, chunks, snoreEpisodes] = await Promise.all(
+      ['nights', 'sessions', 'soundEvents', 'chunks', 'snoreEpisodes'].map(all));
+    db.close();
+    return {
+      nights, sessions, soundEvents, snoreEpisodes,
+      chunks: chunks.map((c) => ({ eventId: c.eventId, seq: c.seq, samples: c.pcm.byteLength / 2 })),
+    };
+  });
+}
+
+/** One event's audio, concatenated by seq, as a plain array. */
+function readAudio(page, eventId) {
+  return page.evaluate(async (id) => {
+    const db = await new Promise((res, rej) => {
+      const r = indexedDB.open('zzz');
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    });
+    const chunks = await new Promise((res, rej) => {
+      const r = db.transaction('chunks', 'readonly').objectStore('chunks').getAll(IDBKeyRange.bound([id], [id, []]));
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    });
+    db.close();
+    const out = [];
+    for (const c of chunks) out.push(...new Int16Array(c.pcm));
+    return out;
+  }, eventId);
+}
+
+function rmsDb(samples) {
+  if (samples.length === 0) return -120;
+  let s = 0;
+  for (const v of samples) s += (v / 32768) ** 2;
+  return 10 * Math.log10(s / samples.length);
+}
+
+const isRecording = (page) => page.evaluate(() => document.body.classList.contains('recording'));
+const waitRecording = (page, timeout = 5000) =>
+  page.waitForFunction(() => document.body.classList.contains('recording'), null, { timeout }).then(() => true, () => false);
+
+/** Home → 開始 → calibration finished (result step visible). */
+async function startAndCalibrate(page) {
+  await page.getByRole('button', { name: '開始', exact: true }).click();
+  await page.getByRole('button', { name: '開始睡覺' }).waitFor({ timeout: 40000 });
+}
+
+async function stopRecording(page) {
+  await page.mouse.click(10, 10);
+  await press(page, page.getByRole('button', { name: '長按 2 秒停止' }), 2300);
+  await page.locator('.timeline').waitFor({ timeout: 10000 });
+}
+
+async function deleteNightFromHome(page) {
+  await press(page, page.getByRole('button', { name: '長按 2 秒刪除這一晚' }), 2300);
+  await page.getByRole('button', { name: '開始', exact: true }).waitFor({ timeout: 5000 });
 }
 
 let browser;
 try {
   browser = await chromium.launch({
-    args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'],
+    args: [
+      '--use-fake-ui-for-media-stream',
+      '--use-fake-device-for-media-stream',
+      `--use-file-for-fake-audio-capture=${fixturePath}`,
+      '--autoplay-policy=no-user-gesture-required',
+    ],
   });
   const context = await browser.newContext({ permissions: ['microphone'], acceptDownloads: true });
   const page = await context.newPage();
@@ -184,7 +265,7 @@ try {
   const failedRequests = [];
   page.on('console', (msg) => {
     if (msg.type() !== 'error') return;
-    // Wake lock may be refused in headless Chromium; that is not a failure (design §7.2).
+    // Wake lock may be refused in headless Chromium; that is not a failure (design_M2 §7.2).
     if (/wake ?lock/i.test(msg.text())) return;
     consoleErrors.push(msg.text());
   });
@@ -198,144 +279,232 @@ try {
     });
   });
 
-  const response = await page.goto(`${baseUrl}?hb=2`, { waitUntil: 'load' });
+  const response = await page.goto(`${baseUrl}?hb=2&cal=5`, { waitUntil: 'load' });
   const gotCsp = response?.headers()['content-security-policy'];
-  expect(
-    gotCsp === expectedCsp,
-    'main document carries the CSP from _headers',
-    { expected: expectedCsp, got: gotCsp },
-  );
+  expect(gotCsp === expectedCsp, 'main document carries the CSP from _headers', { expected: expectedCsp, got: gotCsp });
 
   const heading = page.getByRole('heading', { name: 'Zzz', exact: true });
   expect((await heading.count()) === 1, 'heading "Zzz" is visible');
-  const startButton = page.getByRole('button', { name: '開始', exact: true });
-  expect((await startButton.count()) === 1, 'button "開始" is visible');
 
-  // M1 env-check table, now behind 環境檢查.
+  // M1 env-check table, behind 環境檢查.
   const envButton = page.getByRole('button', { name: '環境檢查', exact: true });
   await envButton.click();
   const tables = page.locator('table');
   await tables.first().waitFor({ timeout: 5000 }).catch(() => {});
   const rowIds = await page.locator('table tbody tr').evaluateAll((rows) => rows.map((r) => r.dataset.id));
   expect((await tables.count()) === 1, 'clicking 環境檢查 renders one <table>');
-  expect(
-    JSON.stringify(rowIds) === JSON.stringify(EXPECTED_IDS),
-    'table has 8 rows with the expected ids in order',
-    rowIds,
-  );
+  expect(JSON.stringify(rowIds) === JSON.stringify(EXPECTED_IDS), 'table has 8 rows with the expected ids in order', rowIds);
   await envButton.click();
   expect((await tables.count()) === 1, 'clicking 環境檢查 again still leaves exactly one <table>');
 
-  // C1
-  const select = page.getByLabel('測試情境');
-  const storedText = page.getByText('已存的測試紀錄');
-  await page.waitForTimeout(300); // let the async stored-sessions lookup finish
-  expect(
-    (await select.count()) === 1 && (await select.inputValue()) === 'N1' && (await storedText.count()) === 0,
-    'C1 home has 測試情境 select defaulting to N1 and no stored sessions',
-  );
+  // E1
+  const startButton = page.getByRole('button', { name: '開始', exact: true });
+  await startButton.waitFor({ timeout: 3000 }).catch(() => {});
+  expect((await startButton.count()) === 1 && (await page.locator('select').count()) === 0,
+    'E1 home has 開始 and no scenario select');
 
-  // C2
-  await select.selectOption('P0');
+  // E2
   await startButton.click();
-  const recording = await page
-    .waitForFunction(() => document.body.classList.contains('recording'), null, { timeout: 3000 })
-    .then(() => true, () => false);
-  const visibleText = await page.evaluate(() => document.body.innerText.trim());
-  expect(recording && visibleText === '', 'C2 recording screen within 3 s, no visible text', { recording, visibleText });
+  const quietShown = await page.getByText('請保持安靜').waitFor({ timeout: 5000 }).then(() => true, () => false);
+  const countdown = await page.locator('[data-field="countdown"]').textContent().catch(() => null);
+  expect(quietShown && /^\d+$/.test(countdown ?? ''), 'E2 calibration screen shows 請保持安靜 and a countdown', { countdown });
 
-  // C3
+  // E3
+  try {
+    await page.getByRole('button', { name: '開始睡覺' }).waitFor({ timeout: 40000 });
+    const floorText = await page.locator('[data-field="cal-floor"]').textContent();
+    const speechText = await page.locator('[data-field="cal-speech"]').textContent();
+    const marginText = await page.locator('[data-field="cal-margin"]').textContent();
+    const status = await page.locator('[data-field="cal-status"]').getAttribute('data-status');
+    const floor = parseFloat(floorText);
+    const speechDb = parseFloat(speechText);
+    const margin = parseFloat(marginText.replace(/^背景 \+/, ''));
+    expect(floor >= -63 && floor <= -57 && speechDb >= -34 && speechDb <= -24 && margin >= 12 && margin <= 18 && status === 'ok',
+      'E3 calibration: floor -63..-57, speech -34..-24, margin 12..18, status ok', { floorText, speechText, marginText, status });
+    console.log(`     E3 sample: 背景 ${floorText}, 說話 ${speechText}, 門檻 ${marginText}, ${status}`);
+  } catch (err) {
+    fail('E3 calibration: floor -63..-57, speech -34..-24, margin 12..18, status ok', String(err));
+  }
+
+  // E4 (+ M2 C2–C4 on the recording screen)
+  await page.getByRole('button', { name: '開始睡覺' }).click();
+  const recording = await waitRecording(page);
+  const visibleText = await page.evaluate(() => document.body.innerText.trim());
+  expect(recording && visibleText === '', 'E4 開始睡覺 enters body.recording with no visible text', { recording, visibleText });
   await page.mouse.click(10, 10);
   const stopButton = page.getByRole('button', { name: '長按 2 秒停止' });
-  const overlayShown = await stopButton.isVisible();
   await page.waitForTimeout(1200);
   const ctxText = await page.locator('[data-field="ctx"]').textContent();
-  expect(overlayShown && ctxText === 'running', 'C3 tap shows overlay with 長按 2 秒停止 and AudioContext running', {
-    overlayShown, ctxText,
-  });
-
-  // C4
+  const eventsText = await page.locator('[data-field="events"]').textContent();
+  expect((await stopButton.isVisible()) && ctxText === 'running' && /個$/.test(eventsText ?? ''),
+    'C3 tap shows the overlay: 長按 2 秒停止, AudioContext running, 事件 count', { ctxText, eventsText });
   await press(page, stopButton, 300);
   await page.waitForTimeout(300);
-  const stillRecording = await page.evaluate(() => document.body.classList.contains('recording'));
-  expect(stillRecording, 'C4 short press keeps recording');
+  expect(await isRecording(page), 'C4 short press keeps recording');
 
-  // C5
-  await page.waitForTimeout(5000);
-  await page.mouse.click(10, 10); // keep the overlay visible
-  await press(page, stopButton, 2300);
-  const hbCell = page.locator('[data-field="heartbeats"]');
-  await hbCell.waitFor({ timeout: 5000 }).catch(() => {});
-  const hbCount = Number(await hbCell.textContent().catch(() => 'NaN'));
-  const leftRecording = await page.evaluate(() => !document.body.classList.contains('recording'));
-  expect(leftRecording && hbCount >= 2, 'C5 long press 2.3 s shows result with >= 2 heartbeats', { hbCount });
+  // E5
+  const t0 = (await readDb(page)).sessions[0]?.startedAt ?? Date.now();
+  const waitMs = t0 + 100_000 - Date.now();
+  console.log(`     waiting ${(waitMs / 1000).toFixed(0)} s for the fixture to reach 100 s…`);
+  if (waitMs > 0) await page.waitForTimeout(waitMs);
+  await stopRecording(page);
+  expect(!(await isRecording(page)), 'E5 long press after fixture 100 s shows the result page');
 
-  // C6
-  try {
-    const { name, json } = await downloadJson(page, page.getByRole('button', { name: '下載全部 JSON' }));
-    const s = json.sessions?.[0];
-    const goodHb = (s?.heartbeats ?? []).some(
-      (h) => h.frames > 0 && h.zeroFrames < h.frames && typeof h.meanDb === 'number' && h.meanDb > -120,
-    );
-    const types = new Set((s?.events ?? []).map((e) => e.type));
-    const ok =
-      FILE_RE.test(name) &&
-      json.schema === 'zzz-m2/1' &&
-      json.sessions.length === 1 &&
-      s.scenario === 'P0' &&
-      s.stoppedAt !== null &&
-      typeof s.ctxSampleRate === 'number' && s.ctxSampleRate > 0 &&
-      s.trackSettings?.echoCancellation === false &&
-      goodHb &&
-      types.has('start') && types.has('stop');
-    expect(ok, 'C6 downloaded JSON has the expected shape and content', {
-      name,
-      schema: json.schema,
-      sessions: json.sessions?.length,
-      scenario: s?.scenario,
-      stoppedAt: s?.stoppedAt,
-      ctxSampleRate: s?.ctxSampleRate,
-      trackSettings: s?.trackSettings,
-      heartbeats: s?.heartbeats,
-      eventTypes: [...types],
-    });
-    console.log(`     C6 sample: ${name}, ctxSampleRate ${s?.ctxSampleRate}, ` +
-      `heartbeat[0] frames ${s?.heartbeats?.[0]?.frames} meanDb ${s?.heartbeats?.[0]?.meanDb?.toFixed?.(1)}, ` +
-      `events ${[...types].join(',')}`);
-  } catch (err) {
-    fail('C6 downloaded JSON has the expected shape and content', String(err));
+  // E6
+  const db = await readDb(page);
+  const rel = (t) => (t - t0) / 1000;
+  const evs = db.soundEvents.map((e) => ({ ...e, core: rel(e.coreStartAt) }));
+  const evA = evs.find((e) => Math.abs(e.core - 30) <= 1.5);
+  const evB = evs.find((e) => Math.abs(e.core - 67) <= 1.5);
+  const samples = evs.filter((e) => e.snoreEpisodeId !== null);
+  const others = evs.filter((e) => e !== evA && e !== evB && !samples.includes(e));
+  const ep = db.snoreEpisodes[0];
+  const summary = {
+    nights: db.nights.map((n) => n.status),
+    events: evs.map((e) => ({ core: +e.core.toFixed(2), len: +(e.sampleCount / 16000).toFixed(2), hasAudio: e.hasAudio,
+      snore: e.snoreEpisodeId !== null, end: e.endReason, peak: e.peakDb })),
+    episodes: db.snoreEpisodes.map((s) => ({ start: +rel(s.startAt).toFixed(2), end: s.endAt && +rel(s.endAt).toFixed(2),
+      bursts: s.burstCount, median: +s.medianIntervalSec.toFixed(2), low: +s.meanLowRatio.toFixed(2), reason: s.endReason })),
+  };
+  console.log(`     E6 sample: ${JSON.stringify(summary)}`);
+  expect(db.nights.length === 1 && db.nights[0].status === 'stopped', 'E6 exactly one night, status stopped', summary.nights);
+  expect(!!evA && evA.hasAudio && evA.sampleCount / 16000 >= 10 && evA.sampleCount / 16000 <= 14,
+    'E6a event A core start at 30 s ± 1.5, has audio, 10–14 s long', summary);
+  expect(!!evB && evB.hasAudio && evB.snoreEpisodeId === null, 'E6b event B core start at 67 s ± 1.5, has audio, not a snore sample', summary);
+  const sampleChunks = db.chunks.filter((c) => samples.some((e) => e.id === c.eventId));
+  expect(samples.length >= 1 && samples.every((e) => !e.hasAudio && e.sampleCount === 0) && sampleChunks.length === 0,
+    'E6c at least one snore sample event; formal mode kept no audio for it', summary);
+  expect(others.length === 0, 'E6d no other events (no false triggers on background)', others);
+  expect(db.snoreEpisodes.length === 1 && Math.abs(rel(ep.startAt) - 45) <= 1.5 && ep.burstCount >= 9 && ep.burstCount <= 10 &&
+    ep.medianIntervalSec >= 3.8 && ep.medianIntervalSec <= 4.2,
+    'E6 one snore episode from 45 s ± 1.5 with 9–10 bursts, median interval 3.8–4.2 s', summary.episodes);
+
+  // E7
+  if (evA) {
+    const audio = await readAudio(page, evA.id);
+    const at31 = Math.round((31 - rel(evA.startAt)) * 16000);
+    const loud = rmsDb(audio.slice(at31 - 8000, at31 + 8000));
+    const quiet = rmsDb(audio.slice(0, 16000));
+    expect(audio.length === evA.sampleCount && loud - quiet >= 20,
+      'E7 event A audio length = sampleCount, 31 s is >= 20 dB above the pre-roll', {
+        length: audio.length, sampleCount: evA.sampleCount, loud, quiet,
+      });
+    console.log(`     E7 sample: ${audio.length} samples, 31 s ${loud.toFixed(1)} dBFS vs pre-roll ${quiet.toFixed(1)} dBFS`);
+  } else {
+    fail('E7 event A audio length = sampleCount, 31 s is >= 20 dB above the pre-roll', 'no event A');
   }
 
-  // C7
+  // E8
+  if (evA) {
+    const play = page.locator(`li[data-event-id="${evA.id}"] button`);
+    const errorsBefore = consoleErrors.length;
+    await play.click();
+    await page.waitForTimeout(500);
+    expect((await play.textContent()) === '停止' && consoleErrors.length === errorsBefore,
+      'E8 播放 on event A turns into 停止 without console errors', { text: await play.textContent() });
+    await play.click();
+  } else {
+    fail('E8 播放 on event A turns into 停止 without console errors', 'no event A');
+  }
+
+  // E9
+  try {
+    const { name, text, json } = await downloadJson(page, page.getByRole('button', { name: '下載除錯 JSON' }));
+    const n = json.nights?.[0];
+    expect(FILE_RE.test(name) && json.schema === 'zzz-m3/1' && n?.soundEvents?.length === db.soundEvents.length &&
+      n?.snoreEpisodes?.length === db.snoreEpisodes.length && n?.sessions?.[0]?.heartbeats?.length > 0 && !text.includes('"pcm"'),
+      'E9 debug JSON: file name, schema zzz-m3/1, events, episodes and heartbeats, no pcm', {
+        name, schema: json.schema, events: n?.soundEvents?.length, episodes: n?.snoreEpisodes?.length,
+      });
+    const hb = n?.sessions?.[0]?.heartbeats?.at(-1);
+    console.log(`     E9 sample: ${name}, last heartbeat frames ${hb?.frames} floorDb ${hb?.floorDb} soundEventCount ${hb?.soundEventCount}`);
+  } catch (err) {
+    fail('E9 debug JSON: file name, schema zzz-m3/1, events, episodes and heartbeats, no pcm', String(err));
+  }
+
+  // E10
   await page.getByRole('button', { name: '回首頁' }).click();
-  await page.getByText('已存的測試紀錄：1 筆').waitFor({ timeout: 3000 }).then(
-    () => pass('C7 home shows 已存的測試紀錄：1 筆'),
-    () => fail('C7 home shows 已存的測試紀錄：1 筆'),
-  );
+  const kept = await page.getByText('上一晚的紀錄還在').waitFor({ timeout: 3000 }).then(() => true, () => false);
+  expect(kept && (await page.getByRole('button', { name: '開始', exact: true }).count()) === 0,
+    'E10 home shows 上一晚的紀錄還在 and no 開始');
 
-  // C8
-  await page.getByLabel('測試情境').selectOption('X');
-  await page.getByRole('button', { name: '開始', exact: true }).click();
-  await page.waitForFunction(() => document.body.classList.contains('recording'), null, { timeout: 3000 }).catch(() => {});
-  await page.waitForTimeout(3000);
-  await page.reload({ waitUntil: 'load' });
+  // E11
   try {
-    await page.getByText('已存的測試紀錄：2 筆').waitFor({ timeout: 3000 });
-    const { json } = await downloadJson(page, page.getByRole('button', { name: '下載全部 JSON' }));
-    const s2 = json.sessions?.[1];
-    expect(
-      json.sessions.length === 2 && s2.stoppedAt === null && s2.heartbeats.length >= 1,
-      'C8 reload mid-session: 2 sessions, second has stoppedAt null and >= 1 heartbeat',
-      { sessions: json.sessions.length, stoppedAt: s2?.stoppedAt, heartbeats: s2?.heartbeats?.length },
-    );
+    await deleteNightFromHome(page);
+    const after = await readDb(page);
+    expect(after.nights.length + after.soundEvents.length + after.chunks.length + after.snoreEpisodes.length === 0,
+      'E11 long-press delete: 開始 is back and nights / soundEvents / chunks / snoreEpisodes are empty', {
+        nights: after.nights.length, events: after.soundEvents.length, chunks: after.chunks.length,
+      });
   } catch (err) {
-    fail('C8 reload mid-session: 2 sessions, second has stoppedAt null and >= 1 heartbeat', String(err));
+    fail('E11 long-press delete: 開始 is back and nights / soundEvents / chunks / snoreEpisodes are empty', String(err));
   }
 
-  // C9
-  await press(page, page.getByRole('button', { name: '刪除全部' }), 2300);
-  await page.waitForTimeout(500);
-  expect((await page.getByText('已存的測試紀錄').count()) === 0, 'C9 long-press 刪除全部 clears stored sessions');
+  // E12
+  try {
+    await startAndCalibrate(page);
+    // Test mode for this night: the trigger margin shown drops by testMarginOffsetDb (3 dB).
+    const marginOf = async () => parseFloat((await page.locator('[data-field="cal-margin"]').textContent()).replace(/^背景 \+/, ''));
+    const formalMargin = await marginOf();
+    await page.getByRole('radio', { name: /測試/ }).check();
+    const testMargin = await marginOf();
+    await page.getByRole('button', { name: '開始睡覺' }).click();
+    await waitRecording(page);
+    const d12 = await readDb(page);
+    expect(d12.nights[0]?.mode === 'test' && Math.abs(formalMargin - 3 - Math.max(6, testMargin)) < 1e-9 && testMargin < formalMargin,
+      'E12a choosing 測試 lowers the shown margin by 3 dB and stores mode test', { formalMargin, testMargin, mode: d12.nights[0]?.mode });
+    await page.waitForTimeout(5000);
+    await page.reload({ waitUntil: 'load' });
+    const shown = await page.getByText('上次監測沒有正常結束').waitFor({ timeout: 5000 }).then(() => true, () => false);
+    expect(shown, 'E12 reload while recording shows 上次監測沒有正常結束');
+
+    // E13
+    await page.getByRole('button', { name: '繼續監測' }).click();
+    const rec2 = await waitRecording(page);
+    const d13 = await readDb(page);
+    expect(rec2 && d13.nights.length === 1 && d13.sessions.filter((s) => s.nightId === d13.nights[0].id).length === 2,
+      'E13 繼續監測 records again in the same night with 2 sessions', { rec2, sessions: d13.sessions.length });
+    await page.waitForTimeout(3000);
+    await stopRecording(page);
+    pass('E13 stop after resuming shows the result page');
+  } catch (err) {
+    fail('E12/E13 reload and resume', String(err));
+  }
+
+  // E14
+  try {
+    await page.getByRole('button', { name: '回首頁' }).click();
+    await deleteNightFromHome(page);
+    await startAndCalibrate(page);
+    await page.getByRole('button', { name: '開始睡覺' }).click();
+    await waitRecording(page);
+    await page.waitForTimeout(5000);
+    await page.reload({ waitUntil: 'load' });
+    await page.getByRole('button', { name: '結束並查看' }).click({ timeout: 5000 });
+    await page.locator('.timeline').waitFor({ timeout: 5000 });
+    const d14 = await readDb(page);
+    expect(d14.nights.length === 1 && d14.nights[0].status === 'stopped' && d14.sessions.every((s) => s.stoppedAt !== null),
+      'E14 reload then 結束並查看: result page, night stopped', { nights: d14.nights.map((n) => n.status) });
+  } catch (err) {
+    fail('E14 reload then 結束並查看: result page, night stopped', String(err));
+  }
+
+  // E15
+  try {
+    await page.getByRole('button', { name: '回首頁' }).click();
+    await deleteNightFromHome(page);
+    await page.getByRole('button', { name: '開始', exact: true }).click();
+    await page.getByText('請保持安靜').waitFor({ timeout: 5000 });
+    await page.waitForTimeout(1500);
+    await page.reload({ waitUntil: 'load' });
+    await page.getByText('上次校準沒有完成').waitFor({ timeout: 5000 });
+    await page.getByRole('button', { name: '重新開始' }).click();
+    await page.getByRole('button', { name: '開始', exact: true }).waitFor({ timeout: 5000 });
+    const d15 = await readDb(page);
+    expect(d15.nights.length === 0, 'E15 reload during calibration: 上次校準沒有完成 → 重新開始 → home with 開始', d15.nights);
+  } catch (err) {
+    fail('E15 reload during calibration: 上次校準沒有完成 → 重新開始 → home with 開始', String(err));
+  }
 
   // C10
   await page.waitForTimeout(200);
@@ -349,6 +518,7 @@ try {
 } finally {
   await browser?.close();
   await new Promise((r) => server.close(r));
+  await rm(fixtureDir, { recursive: true, force: true });
 }
 
 if (failed) {
