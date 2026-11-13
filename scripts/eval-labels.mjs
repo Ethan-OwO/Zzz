@@ -55,8 +55,8 @@ for (const path of files) {
     console.error(`error: cannot read ${path}: ${e.message}`);
     process.exit(1);
   }
-  if (data.schema !== 'zzz-m4/1') {
-    console.error(`warning: ${path}: schema ${JSON.stringify(data.schema)} is not zzz-m4/1, skipped`);
+  if (data.schema !== 'zzz-m4/1' && data.schema !== 'zzz-export/1') { // zzz-export/1 = data.json in the M7 zip
+    console.error(`warning: ${path}: schema ${JSON.stringify(data.schema)} is not zzz-m4/1 or zzz-export/1, skipped`);
     continue;
   }
   for (const night of data.nights ?? []) {
