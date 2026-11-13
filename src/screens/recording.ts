@@ -1,4 +1,5 @@
 import type { RunningSession } from '../monitor/session';
+import { motionLive } from '../motion/index';
 import type { NightRecord } from '../monitor/types';
 import type { LiveStatusFull } from './app';
 
@@ -77,6 +78,7 @@ export function renderRecording(
   const wake = row(list, 'Wake lock', 'wakelock');
   const eventsRow = row(list, '事件', 'events');
   const snoreRow = row(list, '打呼', 'snore');
+  const motion = row(list, '動作', 'motion');
 
   let stopping = false;
   const stopButton = createHoldButton('長按 2 秒停止', 2000, () => {
@@ -118,6 +120,10 @@ export function renderRecording(
       db.textContent = s.lastDb === null ? '–' : `${s.lastDb.toFixed(1)} dB`;
       ctx.textContent = s.ctxState;
       wake.textContent = s.wakeLock;
+      const m = motionLive();
+      motion.textContent = !m ? '—'
+        : m.rateHz === null ? '等待第一個區間'
+        : `${m.rateHz.toFixed(0)} Hz · 上個區間動 ${m.lastActiveSec ?? 0} 秒`;
       const r = s.recorder;
       eventsRow.textContent = r ? `${r.soundEventCount} 個` : '–';
       snoreRow.textContent = r?.snapshot.inSnoreEpisode ? '打呼中' : r?.snapshot.state === 'warmup' ? '暖機中' : '—';

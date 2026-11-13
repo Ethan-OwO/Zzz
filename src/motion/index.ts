@@ -68,23 +68,26 @@ export async function lastRecordedPlacement(sessionIds: string[]): Promise<Place
   }
 }
 
-/** One line for the result screen. */
-export async function motionSummary(sessionId: string): Promise<string> {
+/** One line for the result screen, over every session of the night. */
+export async function motionSummary(sessionIds: string[]): Promise<string> {
   let data: MotionSessionData[];
   try {
-    data = await getMotionData([sessionId]);
+    data = await getMotionData(sessionIds);
   } catch {
     return '讀取失敗';
   }
-  const s = data[0];
-  if (!s) return '未啟用(床頭櫃)';
-  const filled = s.epochs.filter((e) => e.samples > 0);
-  const moved = s.epochs.filter((e) => e.activeSec >= 1).length;
+  if (data.length === 0) return '未啟用(床頭櫃)';
+  const epochs = data.flatMap((s) => s.epochs);
+  const filled = epochs.filter((e) => e.samples > 0);
+  const moved = epochs.filter((e) => e.activeSec >= 1).length;
   const rate = filled.length > 0 ? filled.reduce((a, e) => a + e.rateHz, 0) / filled.length : 0;
-  const quality = s.quality ?? decideQuality(s.epochs, s.params);
-  return `${s.epochs.length} 個區間，有動 ${moved} 個，平均 ${rate.toFixed(0)} Hz，品質 ${quality}`;
+  // A night with any binary session is binary as a whole (the weaker one decides).
+  const qualities = data.map((s) => s.quality ?? decideQuality(s.epochs, s.params));
+  const quality = qualities.includes('binary') ? 'binary' : qualities.includes('full') ? 'full' : 'none';
+  return `${epochs.length} 個區間，有動 ${moved} 個，平均 ${rate.toFixed(0)} Hz，品質 ${quality}`;
 }
 
-export function exportMotion(): Promise<MotionSessionData[]> {
-  return getMotionData();
+/** Omitted sessionIds = every motion session. */
+export function exportMotion(sessionIds?: string[]): Promise<MotionSessionData[]> {
+  return getMotionData(sessionIds);
 }

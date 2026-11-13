@@ -1,5 +1,6 @@
 // Shown when a night was not stopped normally (page closed, reloaded or crashed).
 import type { NightRecord } from '../monitor/types';
+import { lastRecordedPlacement, motionResumeInGesture } from '../motion/index';
 import { deleteNight, getNightData, lastHeartbeatAt, putNight, putSession, putSnoreEpisode, putSoundEvents } from '../storage/db';
 import type { Nav } from './app';
 import { beginSession, button, el, errorParts, hhmm } from './app';
@@ -43,6 +44,8 @@ export async function renderRecovery(root: HTMLElement, night: NightRecord, nav:
   }
 
   const last = await finalizeNight(night);
+  // M5: resume motion only if this night had it; the iOS prompt must happen inside the tap below.
+  const placement = await lastRecordedPlacement((await getNightData(night.id)).sessions.map((s) => s.id));
   main.append(
     el('p', undefined, '上次監測沒有正常結束'),
     el('p', 'muted', `最後一筆紀錄：${hhmm(last)}`),
@@ -59,7 +62,10 @@ export async function renderRecovery(root: HTMLElement, night: NightRecord, nav:
       resume.disabled = true;
       // Synchronously inside the click (iOS user activation). Calibration is reused;
       // the detector warms up again for floorMinSec before anything triggers.
-      beginSession(night.id).then(async (session) => {
+      const begun = beginSession(night.id);
+      // After the mic call so AudioContext stays first in the gesture; still synchronous.
+      motionResumeInGesture(placement);
+      begun.then(async (session) => {
         await session.beginDetection(night, null);
         nav.recording(session, night);
       }, (err: unknown) => {

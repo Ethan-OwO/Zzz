@@ -427,3 +427,56 @@ body.calibrating {
 .modes .muted {
   text-align: left;
 }
+
+/* M5 placement picker */
+.placement {
+  width: 100%;
+  max-width: 24rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.placement-label {
+  margin: 0;
+  text-align: center;
+  color: #a3a3a3;
+}
+
+.placement-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.placement-option {
+  min-height: 56px;
+  padding: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font: inherit;
+  color: #d4d4d4;
+  background: transparent;
+  border: 1px solid #525252;
+  border-radius: 0.75rem;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.placement-option small {
+  color: #a3a3a3;
+}
+
+.placement-option.selected {
+  border-color: #d4d4d4;
+  background: #262626;
+}
+
+.placement-hint {
+  margin: 0;
+  font-size: 0.875rem;
+  color: #fca5a5;
+  text-align: center;
+}

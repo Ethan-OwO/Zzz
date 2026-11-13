@@ -105,14 +105,36 @@ try {
     if (/wake ?lock/i.test(msg.text())) return; // headless may refuse wake lock
     consoleErrors.push(msg.text());
   });
-  page.on('pageerror', (err) => pageErrors.push(err.message));
+  page.on('pageerror', (err) => pageErrors.push(err.stack ?? err.message));
 
-  const url = `${baseUrl}?hb=2&me=2`;
+  const url = `${baseUrl}?hb=2&me=2&cal=3`;
   await page.goto(url, { waitUntil: 'load' });
 
   const bed = page.getByRole('radio', { name: /放床上/ });
   const stand = page.getByRole('radio', { name: /放床頭櫃/ });
-  const start = page.getByRole('button', { name: '開始', exact: true });
+  const waitRecording = () =>
+    page.waitForFunction(() => document.body.classList.contains('recording'), null, { timeout: 5000 });
+
+  /** Home → 開始 → M3 calibration → 開始睡覺 → recording. */
+  async function startNight() {
+    await page.getByRole('button', { name: '開始', exact: true }).click();
+    const sleep = page.getByRole('button', { name: '開始睡覺' });
+    const fallback = page.getByRole('button', { name: '用預設門檻' });
+    // The fake mic may not sound like speech; then the same button reads 用預設門檻.
+    const go = sleep.or(fallback).first();
+    await go.waitFor({ timeout: 40000 });
+    await go.click();
+    await waitRecording();
+  }
+  async function stopNight() {
+    await page.mouse.click(10, 10);
+    await press(page, page.getByRole('button', { name: '長按 2 秒停止' }), 2300);
+    await page.locator('dd[data-field="motion"]').waitFor({ timeout: 10000 });
+  }
+  async function deleteNightFromHome() {
+    await press(page, page.getByRole('button', { name: '長按 2 秒刪除這一晚' }), 2300);
+    await page.getByRole('button', { name: '開始', exact: true }).waitFor({ timeout: 5000 });
+  }
 
   // C1
   expect(
@@ -125,40 +147,38 @@ try {
   await bed.click();
   const bedChecked = await bed.getAttribute('aria-checked');
   await page.reload({ waitUntil: 'load' });
-  const afterReload = await page.getByRole('radio', { name: /放床頭櫃/ }).getAttribute('aria-checked');
+  const afterReload = await stand.getAttribute('aria-checked');
   const lsLen = await page.evaluate(() => localStorage.length);
   expect(bedChecked === 'true' && afterReload === 'true' && lsLen === 0,
     'C2 picking 放床上 is not remembered across reloads and localStorage stays empty', { bedChecked, afterReload, lsLen });
 
-  // C3 bed run: 8 s of samples (movement at 4–6 s), then 2 s with none, then stop.
-  await page.getByRole('radio', { name: /放床上/ }).click();
+  // C3 bed night: 8 s of samples (movement at 4–6 s), then ~2.5 s with none, then stop.
+  await bed.click();
   await page.waitForTimeout(300); // let the permission request settle
   const noHint = await page.locator('.placement-hint').isHidden();
   expect(noHint, 'C3 no permission hint shown when permission is granted or not required');
-  await start.click();
-  await page.waitForFunction(() => document.body.classList.contains('recording'), null, { timeout: 3000 });
+  await startNight();
   await feedMotion(page, 8, 4, 6);
   await page.waitForTimeout(2500);
   await page.mouse.click(10, 10);
   const liveText = await page.locator('[data-field="motion"]').textContent();
   expect(/Hz/.test(liveText ?? ''), 'C3 overlay shows a 動作 rate', liveText);
-  await press(page, page.getByRole('button', { name: '長按 2 秒停止' }), 2300);
-  await page.locator('dd[data-field="motion"]').waitFor({ timeout: 5000 });
+  await stopNight();
 
   // C4
   const db = await readMotionDb(page);
   const s = db.sessions[0];
   const ep = [...db.epochs].sort((a, b) => a.idx - b.idx);
-  const at = (sec) => ep.find((e) => e.startAt - s.startedAt <= sec * 1000 && e.endAt - s.startedAt > sec * 1000);
-  const moving = at(5);
-  const quiet = ep[0];
+  const filled = ep.filter((e) => e.samples > 0);
   expect(
     db.sessions.length === 1 && ['granted', 'not-required'].includes(s.permission) && s.stoppedAt !== null && s.quality === 'binary',
     'C4 one motion session, permission ok, stopped, quality binary',
     { sessions: db.sessions },
   );
-  expect(ep.length >= 5 && ep.length <= 8, 'C4 epoch count 5–8 at 2 s epochs', ep.length);
-  expect(!!moving && moving.activeSec >= 1 && quiet.activeSec === 0, 'C4 movement epoch active, first epoch still',
+  // The fed samples span 8 s = four 2 s epochs; the movement (4–6 s of the feed) lands in the middle ones.
+  expect(filled.length >= 4 && filled.length <= 5, 'C4 four or five epochs with samples', filled.length);
+  expect(filled[0].activeSec === 0 && filled.slice(1, -1).some((e) => e.activeSec >= 1),
+    'C4 movement epoch active, first fed epoch still',
     ep.map((e) => ({ idx: e.idx, samples: e.samples, activeSec: e.activeSec, activity: +e.activity.toFixed(3) })));
   expect(ep.some((e) => e.samples === 0), 'C4 at least one empty epoch');
   console.log(`     C4 rates: ${ep.map((e) => e.rateHz.toFixed(0)).join(',')} Hz`);
@@ -168,31 +188,47 @@ try {
   expect(/品質 binary/.test(summary ?? ''), 'C5 result shows the motion summary', summary);
   const [download] = await Promise.all([
     page.waitForEvent('download'),
-    page.getByRole('button', { name: '下載全部 JSON' }).click(),
+    page.getByRole('button', { name: '下載除錯 JSON' }).click(),
   ]);
   const json = JSON.parse(await readFile(await download.path(), 'utf8'));
-  expect(Array.isArray(json.motion) && json.motion.length === 1 && json.motion[0].epochs.length === ep.length,
-    'C5 exported JSON has motion with the epochs', { motion: json.motion?.length });
+  const nm = json.nights?.[0]?.motion;
+  expect(Array.isArray(nm) && nm.length === 1 && nm[0].epochs.length === ep.length,
+    'C5 exported night JSON has motion with the epochs', { motion: nm?.length });
 
-  // C6 nightstand run
+  // C6 deleting the night also clears zzz-motion
   await page.getByRole('button', { name: '回首頁' }).click();
-  await page.getByRole('radio', { name: /放床頭櫃/ }).click();
-  await page.getByRole('button', { name: '開始', exact: true }).click();
-  await page.waitForFunction(() => document.body.classList.contains('recording'), null, { timeout: 3000 });
+  await deleteNightFromHome();
+  const db1 = await readMotionDb(page);
+  expect(db1.sessions.length === 0 && db1.epochs.length === 0, 'C6 刪除這一晚 also clears zzz-motion', db1);
+
+  // C7 nightstand night records nothing
+  await stand.click();
+  await startNight();
   await feedMotion(page, 2, 99, 99);
-  await page.mouse.click(10, 10);
-  await press(page, page.getByRole('button', { name: '長按 2 秒停止' }), 2300);
-  await page.locator('dd[data-field="motion"]').waitFor({ timeout: 5000 });
+  await stopNight();
   const db2 = await readMotionDb(page);
   const summary2 = await page.locator('dd[data-field="motion"]').textContent();
-  expect(db2.sessions.length === 1 && summary2 === '未啟用(床頭櫃)',
-    'C6 nightstand run records no motion and says 未啟用(床頭櫃)', { sessions: db2.sessions.length, summary2 });
+  expect(db2.sessions.length === 0 && summary2 === '未啟用(床頭櫃)',
+    'C7 nightstand night records no motion and says 未啟用(床頭櫃)', { sessions: db2.sessions.length, summary2 });
+  await page.getByRole('button', { name: '回首頁' }).click();
+  await deleteNightFromHome();
 
-  // C7
-  await press(page, page.getByRole('button', { name: '刪除全部' }), 2300);
-  await page.waitForTimeout(500);
+  // C8 recovery after a reload resumes motion for a bed night
+  await page.getByRole('radio', { name: /放床上/ }).click();
+  await startNight();
+  await feedMotion(page, 3, 99, 99);
+  await page.reload({ waitUntil: 'load' });
+  await page.getByRole('button', { name: '繼續監測' }).click({ timeout: 5000 });
+  await waitRecording();
+  await feedMotion(page, 3, 99, 99);
+  await stopNight();
   const db3 = await readMotionDb(page);
-  expect(db3.sessions.length === 0 && db3.epochs.length === 0, 'C7 刪除全部 also clears zzz-motion', db3);
+  const summary3 = await page.locator('dd[data-field="motion"]').textContent();
+  expect(db3.sessions.length === 2 && db3.sessions.every((x) => x.placement === 'bed') &&
+      db3.sessions.filter((x) => x.stoppedAt !== null).length >= 1 && /個區間/.test(summary3 ?? ''),
+    'C8 繼續監測 after reload starts a second bed motion session; result sums both', { sessions: db3.sessions.length, summary3 });
+  await page.getByRole('button', { name: '回首頁' }).click();
+  await deleteNightFromHome();
 
   // C9 denied permission: a context without sensor permissions.
   {
@@ -207,18 +243,17 @@ try {
       const text = await hint.textContent();
       expect(/只用聲音/.test(text ?? ''), 'C9 denied permission shows the audio-only hint', text);
       await p2.getByRole('button', { name: '開始', exact: true }).click();
-      const rec = await p2.waitForFunction(() => document.body.classList.contains('recording'), null, { timeout: 3000 })
-        .then(() => true, () => false);
-      expect(rec, 'C9 recording still starts after a denied motion permission');
+      const cal = await p2.getByText('請保持安靜').waitFor({ timeout: 5000 }).then(() => true, () => false);
+      expect(cal, 'C9 the night still starts after a denied motion permission');
     } else {
       console.log('SKIP C9 (this Chromium has no DeviceMotionEvent.requestPermission)');
     }
     await ctx2.close();
   }
 
-  // C8
-  expect(consoleErrors.length === 0, 'C8 no console errors', consoleErrors);
-  expect(pageErrors.length === 0, 'C8 no page errors', pageErrors);
+  // C10
+  expect(consoleErrors.length === 0, 'C10 no console errors', consoleErrors);
+  expect(pageErrors.length === 0, 'C10 no page errors', pageErrors);
 } catch (err) {
   fail('motion browser checks threw', err instanceof Error ? err.stack : String(err));
 } finally {

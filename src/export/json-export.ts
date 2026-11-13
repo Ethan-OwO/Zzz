@@ -2,13 +2,12 @@ import type {
   HeartbeatRecord, MonitorEvent, NightRecord, SessionRecord, SnoreEpisodeRecord, SoundEventRecord,
 } from '../monitor/types';
 import { getNight, getNightData, getSessionData, listLegacySessions } from '../storage/db';
+import { exportMotion, type MotionSessionData } from '../motion/index';
 
 export interface ExportFile {
   schema: 'zzz-m2/1';
   exportedAt: number;
   sessions: Array<SessionRecord & { heartbeats: HeartbeatRecord[]; events: MonitorEvent[] }>;
-  /** M5 motion sessions with their 30 s epochs; empty when the phone was never on the bed. */
-  motion: MotionSessionData[];
 }
 
 /** 讀出 M2 的舊測試 session(nightId 為空)與其心跳、事件，組成 ExportFile。 */
@@ -19,7 +18,7 @@ export async function buildExport(): Promise<ExportFile> {
     const { heartbeats, events } = await getSessionData(s.id);
     out.push({ ...s, heartbeats, events });
   }
-  return { schema: 'zzz-m2/1', exportedAt: Date.now(), sessions: out, motion: await exportMotion() };
+  return { schema: 'zzz-m2/1', exportedAt: Date.now(), sessions: out };
 }
 
 export interface ExportFileM3 {
@@ -29,6 +28,8 @@ export interface ExportFileM3 {
     sessions: Array<SessionRecord & { heartbeats: HeartbeatRecord[]; events: MonitorEvent[] }>;
     soundEvents: SoundEventRecord[];
     snoreEpisodes: SnoreEpisodeRecord[];
+    /** M5 motion sessions with their 30 s epochs; empty when the phone was on the nightstand. */
+    motion: MotionSessionData[];
   }>;
 }
 
@@ -40,7 +41,8 @@ export async function buildNightExport(nightId: string): Promise<ExportFileM3> {
     const { sessions, soundEvents, snoreEpisodes } = await getNightData(nightId);
     const withData = [];
     for (const s of sessions) withData.push({ ...s, ...(await getSessionData(s.id)) });
-    nights.push({ ...night, sessions: withData, soundEvents, snoreEpisodes });
+    const motion = await exportMotion(sessions.map((s) => s.id));
+    nights.push({ ...night, sessions: withData, soundEvents, snoreEpisodes, motion });
   }
   return { schema: 'zzz-m3/1', exportedAt: Date.now(), nights };
 }
