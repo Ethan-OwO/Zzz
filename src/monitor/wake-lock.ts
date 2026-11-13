@@ -5,6 +5,7 @@ export class ScreenWakeLock {
   private readonly onEvent: (type: MonitorEventType, detail: string) => void;
   private sentinel: WakeLockSentinel | null = null;
   private current: WakeLockStatus;
+  private inflight: Promise<void> | null = null;
 
   constructor(onEvent: (type: MonitorEventType, detail: string) => void) {
     this.onEvent = onEvent;
@@ -16,7 +17,17 @@ export class ScreenWakeLock {
   }
 
   /** 不支援時 status='unsupported' 直接 return。失敗時 status='error',記 wakelock-error(err.name),不 throw。 */
-  async request(): Promise<void> {
+  request(): Promise<void> {
+    // Concurrent calls (auto recovery + tap) share one request so only one sentinel exists.
+    if (!this.inflight) {
+      this.inflight = this.doRequest().finally(() => {
+        this.inflight = null;
+      });
+    }
+    return this.inflight;
+  }
+
+  private async doRequest(): Promise<void> {
     if (!('wakeLock' in navigator)) {
       this.current = 'unsupported';
       return;

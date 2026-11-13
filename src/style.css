@@ -103,3 +103,188 @@ h1 {
 .env-check .unknown {
   color: #facc15;
 }
+
+/* ---------- M2: home ---------- */
+
+.scenario {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.scenario select {
+  min-height: 44px;
+  padding: 0.25rem 0.75rem;
+  font: inherit;
+  color: #e5e5e5;
+  background: #171717;
+  border: 1px solid #404040;
+  border-radius: 0.5rem;
+}
+
+.start-button:disabled {
+  background: #525252;
+  cursor: progress;
+}
+
+.error {
+  margin: 0;
+  color: #f87171;
+  text-align: center;
+  word-break: break-word;
+}
+
+.stored {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.stored p {
+  margin: 0;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.75rem;
+}
+
+.secondary-button {
+  min-height: 44px;
+  padding: 0.5rem 1.25rem;
+  font: inherit;
+  color: #e5e5e5;
+  background: #262626;
+  border: 1px solid #404040;
+  border-radius: 999px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.text-button {
+  min-height: 44px;
+  padding: 0.5rem 1rem;
+  font: inherit;
+  font-size: 0.875rem;
+  color: #a3a3a3;
+  background: none;
+  border: none;
+  text-decoration: underline;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+/* ---------- M2: long-press button ---------- */
+
+.hold-button {
+  position: relative;
+  overflow: hidden;
+  min-height: 48px;
+  padding: 0.75rem 1.5rem;
+  font: inherit;
+  color: #e5e5e5;
+  background: #262626;
+  border: 1px solid #525252;
+  border-radius: 999px;
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: manipulation;
+}
+
+.hold-label {
+  position: relative;
+  z-index: 1;
+}
+
+.hold-progress {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  background: #7f1d1d;
+  transition: width 0s;
+}
+
+.hold-button.holding .hold-progress {
+  width: 100%;
+  transition: width 2s linear;
+}
+
+/* ---------- M2: recording screen ---------- */
+
+body.recording {
+  padding: 0;
+  background: #000;
+  cursor: none;
+}
+
+body.recording #app {
+  max-width: none;
+}
+
+.recording-screen {
+  position: fixed;
+  inset: 0;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.status-overlay {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 1.25rem 1.5rem;
+  color: #a3a3a3;
+  background: #0a0a0a;
+  border: 1px solid #262626;
+  border-radius: 1rem;
+  cursor: default;
+}
+
+.status-overlay[hidden],
+.recover-prompt[hidden] {
+  display: none;
+}
+
+.status-overlay dl,
+.result {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 0.25rem 1rem;
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.status-overlay dt,
+.result dt {
+  color: #737373;
+}
+
+.status-overlay dd,
+.result dd {
+  margin: 0;
+  color: #d4d4d4;
+}
+
+.recover-prompt {
+  position: fixed;
+  inset: 0;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  font-size: 1.25rem;
+  text-align: center;
+  color: #404040;
+  background: #000;
+}
