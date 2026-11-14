@@ -92,7 +92,7 @@ export interface SoundEventRecord {
   startAt: number; endAt: number | null;     // 牆上時間 ms(含 pre-roll / post-roll);null = 進行中
   coreStartAt: number; coreEndAt: number | null; // 觸發到開始 post-roll(不含前後補錄)
   peakDb: number; floorDbAtStart: number;
-  endReason: 'released' | 'split' | 'gap' | 'snore-confirmed' | 'stopped' | 'recovered' | null;
+  endReason: 'released' | 'split' | 'gap' | 'snore-confirmed' | 'floor-shift' | 'stopped' | 'recovered' | null;
   continuesFrom: string | null;              // 長事件切段時，指向前一段
   hasAudio: boolean; audioIncomplete: boolean;
   sampleCount: number;                       // 已寫入的樣本數

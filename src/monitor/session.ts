@@ -1,5 +1,5 @@
 import { AudioCapture, errText } from '../audio/capture';
-import { LowPass, computeFeatures } from '../detect/bands.ts';
+import { HighPass, LowPass, computeFeatures } from '../detect/bands.ts';
 import { DEFAULT_PARAMS, FRAME_SIZE, SAMPLE_RATE } from '../detect/params.ts';
 import { startMotion } from '../motion/index';
 import { Recorder } from '../record/recorder';
@@ -111,6 +111,7 @@ export async function startSession(opts: {
   let recorder: Recorder | null = null;
   let calListener: CalibrationListener | null = null;
   const calLp = new LowPass(DEFAULT_PARAMS.snoreLowCutHz, SAMPLE_RATE);
+  const calHp = new HighPass(DEFAULT_PARAMS.levelHighPassHz, SAMPLE_RATE);
   const calScratch = new Float32Array(FRAME_SIZE);
   let calFrame = 0;
 
@@ -133,7 +134,7 @@ export async function startSession(opts: {
         // The listener may clear itself mid-batch when a calibration step ends.
         const fn = calListener;
         if (!fn) break;
-        const f = computeFeatures(s.pcm, off, calFrame++, calLp, calScratch);
+        const f = computeFeatures(s.pcm, off, calFrame++, calLp, calHp, calScratch);
         fn(f.q, f.zero);
       }
     }

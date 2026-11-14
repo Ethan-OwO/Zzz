@@ -683,7 +683,7 @@ try {
   // E12
   try {
     await startAndCalibrate(page);
-    // Test mode for this night: the trigger margin shown drops by testMarginOffsetDb (3 dB).
+    // Test mode for this night: the trigger margin shown drops by testMarginOffsetDb (1 dB).
     const marginOf = async () => parseFloat((await page.locator('[data-field="cal-margin"]').textContent()).replace(/^背景 \+/, ''));
     const formalMargin = await marginOf();
     await page.getByRole('radio', { name: /測試/ }).check();
@@ -691,8 +691,8 @@ try {
     await page.getByRole('button', { name: '開始睡覺' }).click();
     await waitRecording(page);
     const d12 = await readDb(page);
-    expect(d12.nights[0]?.mode === 'test' && Math.abs(formalMargin - 3 - Math.max(6, testMargin)) < 1e-9 && testMargin < formalMargin,
-      'E12a choosing 測試 lowers the shown margin by 3 dB and stores mode test', { formalMargin, testMargin, mode: d12.nights[0]?.mode });
+    expect(d12.nights[0]?.mode === 'test' && Math.abs(Math.max(6, formalMargin - 1) - testMargin) < 1e-9 && testMargin < formalMargin,
+      'E12a choosing 測試 lowers the shown margin by 1 dB and stores mode test', { formalMargin, testMargin, mode: d12.nights[0]?.mode });
     await page.waitForTimeout(5000);
     await page.reload({ waitUntil: 'load' });
     const shown = await page.getByText('上次監測沒有正常結束').waitFor({ timeout: 5000 }).then(() => true, () => false);

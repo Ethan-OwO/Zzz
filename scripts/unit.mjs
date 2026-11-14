@@ -5,7 +5,7 @@ import { DB_FLOOR, FRAME_SIZE, isZeroFrame, meanSquare, msToDb } from '../src/au
 import { Resampler } from '../src/audio/resampler.ts';
 import { DEFAULT_PARAMS, FRAME_SEC, secToFrames } from '../src/detect/params.ts';
 import { FloorTracker, dequantizeDb, quantizeDb } from '../src/detect/levels.ts';
-import { LowPass } from '../src/detect/bands.ts';
+import { HighPass, LowPass } from '../src/detect/bands.ts';
 import { adjustMargin, computeCalibration, effectiveMargins } from '../src/detect/calibrate.ts';
 import { SnoreTracker } from '../src/detect/snore.ts';
 import { Detector } from '../src/detect/detector.ts';
@@ -167,6 +167,35 @@ function lowRatioOf(freq) {
   }
   check('U-B2 512-sample frames vs sample-by-sample lowMs relative error < 1e-9', maxRel < 1e-9, maxRel.toExponential(2));
 }
+function hpGainDb(freq) {
+  const x = sine(16000, freq, 2);
+  const hp = new HighPass(150, 16000);
+  hp.processMeanSquare(x.subarray(0, 16000)); // settle
+  const tail = x.subarray(16000);
+  return 10 * Math.log10(hp.processMeanSquare(tail) / meanSquare(tail));
+}
+{
+  // 4th-order Butterworth: |H|^2 = r^8 / (1 + r^8), r = f / fc.
+  const g = Object.fromEntries([60, 90, 150, 200, 1000].map((f) => [f, +hpGainDb(f).toFixed(2)]));
+  check('U-B3 HighPass(150): 60 Hz < -30, 90 Hz -17..-19, 150 Hz -3, 200 Hz > -0.7, 1 kHz > -0.05 dB',
+    g[60] < -30 && g[90] < -17 && g[90] > -19 && Math.abs(g[150] + 3.01) < 0.2 && g[200] > -0.7 && g[1000] > -0.05, JSON.stringify(g));
+}
+{
+  const x = new Float32Array(16384).map((_, i) => Math.sin(i * 0.05) + 0.3 * Math.sin(i * 1.3));
+  const ref = new HighPass(150, 16000);
+  const framed = new HighPass(150, 16000);
+  let maxRel = 0;
+  for (let i = 0; i < x.length; i += 512) {
+    let s = 0;
+    for (let j = i; j < i + 512; j++) s += ref.processMeanSquare(x.subarray(j, j + 1));
+    const want = s / 512;
+    const got = framed.processMeanSquare(x.subarray(i, i + 512));
+    maxRel = Math.max(maxRel, Math.abs(got - want) / want);
+  }
+  const off = new HighPass(0, 16000);
+  check('U-B4 HighPass keeps state across frames (rel err < 1e-9); cutoff 0 = no filter',
+    maxRel < 1e-9 && off.processMeanSquare(x) === meanSquare(x), maxRel.toExponential(2));
+}
 
 // ---------- M3: calibrate ----------
 const P = DEFAULT_PARAMS;
@@ -196,8 +225,8 @@ const fill = (n, db) => new Array(n).fill(db);
   const f = effectiveMargins(r, 'formal', P);
   const t = effectiveMargins(r, 'test', P);
   const low = effectiveMargins(adjustMargin(r, -20, P), 'test', P);
-  check('effectiveMargins: formal = calibrated, test = -3 dB, never below 6', f.trigger === 16 && f.release === 12 &&
-    t.trigger === 13 && t.release === 9 && low.trigger === 6, JSON.stringify({ f, t, low }));
+  check('effectiveMargins: formal = calibrated, test = -1 dB, never below 6', f.trigger === 16 && f.release === 12 &&
+    t.trigger === 15 && t.release === 11 && low.trigger === 6, JSON.stringify({ f, t, low }));
 }
 
 // ---------- M3: snore ----------
@@ -305,7 +334,10 @@ class Sim {
 }
 {
   const s = new Sim();
-  s.add(10, QUIET); s.add(130, -45); s.add(10, QUIET);
+  // 0.7 s loud / 0.3 s quiet: a real long sound has dips, so it is split, not taken as a background step.
+  s.add(10, QUIET);
+  for (let i = 0; i < 130; i++) { s.add(0.7, -45); s.add(0.3, QUIET); }
+  s.add(10, QUIET);
   const st = s.of('event-start');
   const en = s.of('event-end');
   const ok = st.length === 3 && en.length === 3 && en[0].reason === 'split' && en[1].reason === 'split' &&
@@ -375,6 +407,29 @@ function snoreSim(insertAfter = -1, keep = false) {
   s.add(100 * FRAME_SEC, QUIET, 0.3, true);
   const after = s.d.snapshot().floorDb;
   check('U-D10 100 zero frames: floor unchanged, no trigger', before === after && s.actions.length === 0, `${before} / ${after}`);
+}
+{
+  // N1: the background steps up 15 dB (AC / fan turns on) and stays.
+  const s = new Sim();
+  s.add(10, QUIET);
+  s.add(180, -45);
+  const st = s.of('event-start');
+  const en = s.of('event-end');
+  const lenSec = en[0] ? (en[0].toFrame - st[0].coreFromFrame) * FRAME_SEC : NaN;
+  const floor = s.d.snapshot().floorDb;
+  check('U-D11 steady +15 dB step: one event ends floor-shift after ~30 s, floor rebased, nothing after',
+    st.length === 1 && en.length === 1 && en[0].reason === 'floor-shift' && Math.abs(lenSec - P.floorShiftSec) < 0.5 && floor === -45,
+    JSON.stringify({ types: s.types(), lenSec, floor }));
+}
+{
+  // Snore-like rhythm at the same level never looks like a background step: the gaps keep the short p20 low.
+  const s = new Sim();
+  s.add(10, QUIET);
+  for (let i = 0; i < 40; i++) { s.add(1.2, -45); s.add(0.6, QUIET); }
+  s.add(10, QUIET);
+  const shifts = s.actions.filter((a) => a.reason === 'floor-shift').length;
+  check('U-D12 1.2 s on / 0.6 s off for 72 s: no floor-shift', shifts === 0 && s.d.snapshot().floorDb === QUIET,
+    JSON.stringify({ types: s.types(), floor: s.d.snapshot().floorDb }));
 }
 {
   const d = new Detector(P, 10, 6);
