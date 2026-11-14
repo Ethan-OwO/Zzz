@@ -28,6 +28,15 @@ export const EN: UiStrings = {
     legacyCount: (n) => `Old test records: ${n}`,
   },
 
+  about: {
+    privacyTitle: 'Nothing is uploaded',
+    privacyBody:
+      'Zzz is a static web page: recording, detection and analysis all happen in the browser on this device, and records stay on this device only. The site has no server-side code, collects no data, and uses no tracking or analytics.',
+    sourceLead: 'The source code is public on GitHub, so you can check it yourself:',
+    sourceLink: 'GitHub · Ethan-OwO/Zzz',
+    star: 'If you find it useful, a ⭐ Star on GitHub is welcome!',
+  },
+
   placement: {
     question: 'Where is the phone?',
     bed: 'On the bed',

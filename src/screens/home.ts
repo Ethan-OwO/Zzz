@@ -5,6 +5,7 @@ import { deleteLegacySessions, deleteNight, listLegacySessions, listNights, putN
 import type { Nav } from './app';
 import { beginSession, button, el, errorParts, hhmm, langToggle, newNight } from './app';
 import { ui } from '../i18n/index';
+import { renderAbout } from './about';
 import { createHoldButton } from './recording';
 
 export function textButton(label: string, onClick: () => void): HTMLButtonElement {
@@ -28,6 +29,8 @@ export function renderHome(root: HTMLElement, nav: Nav, opts: { error?: string; 
 
   const results = el('section', 'results');
   root.append(textButton(t.home.envCheck, () => renderEnvCheckTable(runEnvChecks(), results)), results);
+
+  root.append(renderAbout());
 
   void renderMain(root, main, nav);
 }

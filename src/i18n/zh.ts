@@ -30,6 +30,15 @@ export const ZH = {
     legacyCount: (n: number) => `舊的測試紀錄：${n} 筆`,
   },
 
+  about: {
+    privacyTitle: '不會上傳任何東西',
+    privacyBody:
+      'Zzz 是一個靜態網頁：錄音、偵測和分析全部在這台裝置的瀏覽器裡完成，紀錄只存在本機，網站沒有伺服器端程式、不收集資料，也沒有任何追蹤或分析工具。',
+    sourceLead: '原始碼公開在 GitHub，可以自己檢查：',
+    sourceLink: 'GitHub · Ethan-OwO/Zzz',
+    star: '覺得好用的話，歡迎到 GitHub 給個 ⭐ Star！',
+  },
+
   placement: {
     question: '手機放哪裡',
     bed: '放床上',
