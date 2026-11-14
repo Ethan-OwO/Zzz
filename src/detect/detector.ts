@@ -14,7 +14,7 @@ export type DetectorAction =
   | { type: 'event-commit'; eventKey: number; snoreLike: boolean }
   | { type: 'event-discard'; eventKey: number; asSnore: true } // tentative 判定為打呼，丟掉音訊
   // toFrame 不含;coreToFrame = 開始 post-roll 的那一幀(沒有 post-roll 時 = toFrame)
-  | { type: 'event-end'; eventKey: number; toFrame: number; coreToFrame: number; reason: 'released' | 'split' | 'gap' | 'snore-confirmed' }
+  | { type: 'event-end'; eventKey: number; toFrame: number; coreToFrame: number; reason: 'released' | 'split' | 'gap' | 'snore-confirmed' | 'floor-shift' }
   | { type: 'snore-start'; episodeKey: number; fromFrame: number; sampleEventKeys: number[]; bursts: Burst[] }
   | { type: 'snore-burst'; episodeKey: number; burst: Burst }
   | { type: 'snore-end'; episodeKey: number; toFrame: number; reason: 'quiet' | 'gap' };
@@ -48,6 +48,8 @@ export class Detector {
   private readonly releaseMargin: number;
   private readonly keepSnoreAudio: boolean;
   private readonly floor: FloorTracker;
+  private readonly shortFloor: FloorTracker; // last floorShiftSec, same percentile
+  private readonly shiftFrames: number;
   private readonly snore: SnoreTracker;
 
   private readonly warmFrames: number;
@@ -84,6 +86,7 @@ export class Detector {
   private nextEpisodeKey = 0;
   private cur = 0; // frame being processed
   private floorNow: number | null = null;
+  private eventCoreFrom = 0; // core start of the open event, kept across splits
 
   /** triggerMarginDb / releaseMarginDb 來自睡前校準;eventKey / episodeKey 從 0 遞增。 */
   constructor(p: DetectParams, triggerMarginDb: number, releaseMarginDb: number, keepSnoreAudio = false) {
@@ -93,6 +96,8 @@ export class Detector {
     this.keepSnoreAudio = keepSnoreAudio;
     this.floor = new FloorTracker(secToFrames(p.floorWindowSec), p.floorPercentile);
     this.snore = new SnoreTracker(p);
+    this.shiftFrames = p.floorShiftSec > 0 ? secToFrames(p.floorShiftSec) : 0;
+    this.shortFloor = new FloorTracker(Math.max(1, this.shiftFrames), p.floorPercentile);
     this.warmFrames = secToFrames(p.floorMinSec);
     this.releaseFrames = secToFrames(p.releaseSec);
     this.postFrames = secToFrames(p.postRollSec);
@@ -124,7 +129,10 @@ export class Detector {
     this.cur = fi;
 
     // 1. floor (zero frames are a pipeline fault, not background)
-    if (!f.zero) this.floor.push(f.q);
+    if (!f.zero) {
+      this.floor.push(f.q);
+      this.shortFloor.push(f.q);
+    }
     if (!this.warm && this.floor.count >= this.warmFrames) this.warm = true;
     this.floorNow = this.floor.floorDb();
     if (!this.warm || this.floorNow === null) return out;
@@ -184,6 +192,24 @@ export class Detector {
     if (triggered && !this.burst) this.startBurst();
     if (triggered && !this.event) this.startEvent(fi, this.snore.inEpisode, out);
 
+    // 5b. background step (design: N1 tuning). The event has been loud for floorShiftSec and even
+    // the quietest floorPercentile % of that time stays above release: it never went back to quiet,
+    // so this is a new background (AC, fan), not a sound. End it and rebase the floor on that time,
+    // instead of waiting for the long window (~0.8 × floorWindowSec) to catch up.
+    const e1 = this.event;
+    if (this.shiftFrames > 0 && e1 && !e1.tentative && this.evState === 'active' &&
+        fi + 1 - this.eventCoreFrom >= this.shiftFrames && this.shortFloor.count >= this.shiftFrames) {
+      const sf = this.shortFloor.floorDb();
+      if (sf !== null && sf >= releaseDb) {
+        this.endEvent('floor-shift', fi + 1, out);
+        this.floor.rebaseFrom(this.shortFloor);
+        this.floorNow = this.floor.floorDb();
+        this.burst = null;
+        this.clearWindow();
+        return out;
+      }
+    }
+
     // 6. split long events
     const e2 = this.event;
     if (e2 && !e2.tentative && fi + 1 - e2.fromFrame >= this.maxEventFrames) {
@@ -225,6 +251,7 @@ export class Detector {
   /** 從頭開始(恢復後的新 session):清空噪音基準與一切狀態，重新暖機。 */
   resetAll(): void {
     this.floor.reset();
+    this.shortFloor.reset();
     this.snore.reset();
     this.clearWindow();
     this.warm = false;
@@ -348,6 +375,7 @@ export class Detector {
     const fromFrame = Math.max(ws - this.preFrames, floorFrom);
     const key = this.nextEventKey++;
     this.event = { key, fromFrame, tentative };
+    this.eventCoreFrom = coreFromFrame;
     this.evState = 'active';
     this.quietRun = 0;
     this.postCount = 0;
@@ -370,7 +398,7 @@ export class Detector {
     this.quietRun = 0;
   }
 
-  private endEvent(reason: 'released' | 'split' | 'gap' | 'snore-confirmed', toFrame: number, out: DetectorAction[]): void {
+  private endEvent(reason: 'released' | 'split' | 'gap' | 'snore-confirmed' | 'floor-shift', toFrame: number, out: DetectorAction[]): void {
     const ev = this.event!;
     const coreToFrame = this.evState === 'post-roll' ? this.coreTo : toFrame;
     out.push({ type: 'event-end', eventKey: ev.key, toFrame, coreToFrame, reason });

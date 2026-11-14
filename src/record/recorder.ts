@@ -2,7 +2,7 @@
 // snore episodes in IndexedDB. Time is derived from sample counts, not timers.
 import { FRAME_SIZE, SAMPLE_RATE } from '../detect/params.ts';
 import type { DetectParams } from '../detect/params.ts';
-import { LowPass, computeFeatures } from '../detect/bands.ts';
+import { HighPass, LowPass, computeFeatures } from '../detect/bands.ts';
 import { Detector, burstStats } from '../detect/detector.ts';
 import type { DetectorAction, DetectorSnapshot } from '../detect/detector.ts';
 import { dequantizeDb } from '../detect/levels.ts';
@@ -64,6 +64,7 @@ export class Recorder {
   private readonly hooks: RecorderHooks;
   private readonly detector: Detector;
   private readonly lp: LowPass;
+  private readonly hp: HighPass;
   private readonly scratch = new Float32Array(FRAME_SIZE);
   private readonly ring: Int16Ring;
 
@@ -97,6 +98,7 @@ export class Recorder {
     this.detector = new Detector(p, trigger, release, night.mode === 'test');
     if (hooks.seedFloor && hooks.seedFloor.length > 0) this.detector.seedFloor(hooks.seedFloor);
     this.lp = new LowPass(p.snoreLowCutHz, SAMPLE_RATE);
+    this.hp = new HighPass(p.levelHighPassHz, SAMPLE_RATE);
     this.ring = new Int16Ring((p.preRollSec + p.snoreMaxBurstSec + 2) * SAMPLE_RATE);
     this.eventCount = hooks.priorEventCount;
     this.snoreCount = hooks.priorSnoreCount;
@@ -115,7 +117,7 @@ export class Recorder {
     }
     for (let off = 0; off + FRAME_SIZE <= pcm.length; off += FRAME_SIZE) {
       this.ring.push(pcm.subarray(off, off + FRAME_SIZE));
-      const f = computeFeatures(pcm, off, this.nextFrame, this.lp, this.scratch);
+      const f = computeFeatures(pcm, off, this.nextFrame, this.lp, this.hp, this.scratch);
       this.recentQ.copyWithin(0, 1);
       this.recentQ[this.recentQ.length - 1] = f.zero ? 0 : f.q;
       const db = dequantizeDb(f.q);

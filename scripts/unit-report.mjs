@@ -89,7 +89,7 @@ console.log('— R: report core (M6 T1)');
   check('R1 floor has one point per heartbeat', r.floor.length === 480 && r.floor[0].floorDb === -62);
   check('R1 calibration = formal trigger', r.calibration?.triggerMarginDb === 11 && r.calibration.speechDb === -35);
   const t = buildReport(input({ n: { mode: 'test' } }));
-  check('R1b test mode: test-mode note first, margin lowered 3 dB', codes(t)[0] === 'test-mode' && t.calibration?.triggerMarginDb === 8);
+  check('R1b test mode: test-mode note first, margin lowered 1 dB', codes(t)[0] === 'test-mode' && t.calibration?.triggerMarginDb === 10);
 }
 {
   const mid1 = at(2, 0);
@@ -267,7 +267,7 @@ console.log('— M: report.md / prompt.md (M7 T1)');
   const lines = md.split('\n');
   check('M1 locale comment first', lines[0] === '<!-- locale: zh-TW -->');
   check('M1 title with night date', lines[1] === '# Zzz 睡眠聲音報告 — 2026-11-13 晚上', lines[1]);
-  check('M1 header lines', md.includes('- 監測：23:01 – 07:00') && md.includes('時區 UTC+08:00') && md.includes('門檻 +8.0 dB'));
+  check('M1 header lines', md.includes('- 監測：23:01 – 07:00') && md.includes('時區 UTC+08:00') && md.includes('門檻 +10.0 dB'));
   const summaryRows = ['打呼', '說話', '其他', '未分類'].filter((c) => lines.some((l) => l.startsWith(`| ${c} | `)));
   check('M1 summary table has four rows', summaryRows.length === 4, summaryRows.join());
   const rowA = lines.find((l) => l.startsWith('| 1 | '));

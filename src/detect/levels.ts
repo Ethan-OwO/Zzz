@@ -66,6 +66,13 @@ export class FloorTracker {
     return q === null ? null : dequantizeDb(q);
   }
 
+  /** 用另一個 tracker 窗口裡的幀(由舊到新)取代目前內容。背景換檔時拿短窗口重設噪音基準。 */
+  rebaseFrom(other: FloorTracker): void {
+    this.reset();
+    const len = other.ring.length;
+    for (let k = 0; k < other.n; k++) this.push(other.ring[(other.head - other.n + k + len * 2) % len]!);
+  }
+
   /** 清空。 */
   reset(): void {
     this.hist.fill(0);
