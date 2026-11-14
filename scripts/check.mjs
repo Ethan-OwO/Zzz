@@ -21,7 +21,9 @@ const EXPECTED_IDS = [
   'file-share',
   'user-agent',
 ];
-const ALLOWED_URLS = new Set(['http://www.w3.org/2000/svg']);
+// The SVG namespace string, and the GitHub repo URL used only as the href of the home
+// footer link: a user-clicked navigation, never fetched (CSP connect-src 'self' still holds).
+const ALLOWED_URLS = new Set(['http://www.w3.org/2000/svg', 'https://github.com/Ethan-OwO/Zzz']);
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -516,6 +518,12 @@ try {
 
   const heading = page.getByRole('heading', { name: 'Zzz', exact: true });
   expect((await heading.count()) === 1, 'heading "Zzz" is visible');
+
+  // Home footer: privacy note + GitHub link (a plain link, nothing is fetched from github.com).
+  const repoLink = page.locator('footer.about a[href="https://github.com/Ethan-OwO/Zzz"]');
+  expect((await repoLink.count()) === 1 && (await repoLink.getAttribute('rel')) === 'noopener noreferrer',
+    'home footer links to the GitHub repo with rel="noopener noreferrer"');
+  expect((await page.getByText('不會上傳任何東西').count()) === 1, 'home footer shows the no-upload note');
 
   // M1 env-check table, behind 環境檢查.
   const envButton = page.getByRole('button', { name: '環境檢查', exact: true });

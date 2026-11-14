@@ -4,6 +4,7 @@ import { renderPlacementPicker } from '../motion/index';
 import { deleteLegacySessions, deleteNight, listLegacySessions, listNights, putNight } from '../storage/db';
 import type { Nav } from './app';
 import { beginSession, button, el, errorParts, hhmm, newNight } from './app';
+import { renderAbout } from './about';
 import { createHoldButton } from './recording';
 
 export function textButton(label: string, onClick: () => void): HTMLButtonElement {
@@ -26,6 +27,8 @@ export function renderHome(root: HTMLElement, nav: Nav, opts: { error?: string; 
 
   const results = el('section', 'results');
   root.append(textButton('環境檢查', () => renderEnvCheckTable(runEnvChecks(), results)), results);
+
+  root.append(renderAbout());
 
   void renderMain(root, main, nav);
 }

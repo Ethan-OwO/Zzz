@@ -2,7 +2,11 @@
 
 Zzz 是一個在瀏覽器裡跑的免費睡眠聲音監測網站：睡前把手機插著充電、開著網頁，它會學習背景噪音，只記錄超出背景的聲音，醒來後在本機分析。
 
-**零資料收集。** 所有錄音與分析都只在你的裝置上進行，網站不上傳任何資料、不使用分析工具、不載入任何外部資源。
+**網站：<https://zzz.mwagee.workers.dev>**(手機用 Safari 或 Chrome 打開)
+
+**零資料收集。** 所有錄音與分析都只在你的裝置上進行，網站不上傳任何資料、不使用分析工具、不載入任何外部資源。Zzz 是純靜態網頁，沒有伺服器端程式。
+
+覺得好用的話，歡迎給這個 repo 一個 ⭐ Star！
 
 ## 使用方式
 
@@ -43,9 +47,9 @@ pnpm check     # build、單元測試，再用 Chromium 加上合成麥克風音
 
 ## 部署
 
-使用 Cloudflare Pages 連結此 repo:
+使用 Cloudflare Workers(靜態資源)連結此 repo,正式站是 <https://zzz.mwagee.workers.dev>。
 
-- `main` 分支為正式站，其他分支會自動產生預覽網址。
+- 只有 `main` 分支會部署，其他分支不產生預覽網址。
 - Build command:`pnpm build`
 - Build output directory:`dist`
 
