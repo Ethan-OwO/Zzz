@@ -1,3 +1,5 @@
+import { ui, type UiStrings } from './i18n/index';
+
 export type CheckStatus = 'ok' | 'fail' | 'unknown';
 
 export interface EnvCheckItem {
@@ -8,11 +10,13 @@ export interface EnvCheckItem {
   neededFor: string;
 }
 
+type EnvText = UiStrings['env'];
+
 interface CheckDef {
   id: string;
-  label: string;
-  neededFor: string;
-  detect: () => { status: CheckStatus; detail: string };
+  label: (t: EnvText) => string;
+  neededFor: (t: EnvText) => string;
+  detect: (t: EnvText) => { status: CheckStatus; detail: string };
 }
 
 function bool(value: boolean): { status: CheckStatus; detail: string } {
@@ -22,55 +26,55 @@ function bool(value: boolean): { status: CheckStatus; detail: string } {
 const CHECKS: readonly CheckDef[] = [
   {
     id: 'secure-context',
-    label: '安全連線 (HTTPS)',
-    neededFor: 'M2 錄音',
+    label: (t) => t.secureContext,
+    neededFor: (t) => t.forRecording,
     detect: () => bool(window.isSecureContext),
   },
   {
     id: 'get-user-media',
-    label: '麥克風 API',
-    neededFor: 'M2 錄音',
+    label: (t) => t.micApi,
+    neededFor: (t) => t.forRecording,
     detect: () => bool(typeof navigator.mediaDevices?.getUserMedia === 'function'),
   },
   {
     id: 'audio-worklet',
-    label: 'AudioWorklet',
-    neededFor: 'M2 音訊處理',
+    label: () => 'AudioWorklet',
+    neededFor: (t) => t.forAudio,
     detect: () => bool(typeof AudioWorkletNode === 'function'),
   },
   {
     id: 'wake-lock',
-    label: '螢幕常亮 (Wake Lock)',
-    neededFor: 'M2 整夜存活',
+    label: (t) => t.wakeLock,
+    neededFor: (t) => t.forOvernight,
     detect: () => bool('wakeLock' in navigator),
   },
   {
     id: 'indexed-db',
-    label: 'IndexedDB',
-    neededFor: 'M3 邊錄邊存',
+    label: () => 'IndexedDB',
+    neededFor: (t) => t.forStorage,
     detect: () => bool('indexedDB' in window && window.indexedDB !== null),
   },
   {
     id: 'device-motion',
-    label: '動作感測權限模型',
-    neededFor: 'M5 動作感測',
-    detect: () => {
+    label: (t) => t.motionModel,
+    neededFor: (t) => t.forMotion,
+    detect: (t) => {
       if (typeof DeviceMotionEvent === 'undefined') {
-        return { status: 'fail', detail: '無 DeviceMotionEvent' };
+        return { status: 'fail', detail: t.noMotionEvent };
       }
       if (typeof (DeviceMotionEvent as any).requestPermission === 'function') {
-        return { status: 'ok', detail: '需手勢內請求 (iOS)' };
+        return { status: 'ok', detail: t.motionInGesture };
       }
-      return { status: 'ok', detail: '免請求' };
+      return { status: 'ok', detail: t.motionFree };
     },
   },
   {
     id: 'file-share',
-    label: '分享檔案',
-    neededFor: 'M7 匯出',
-    detect: () => {
+    label: (t) => t.fileShare,
+    neededFor: (t) => t.forExport,
+    detect: (t) => {
       if (typeof navigator.canShare !== 'function') {
-        return { status: 'unknown', detail: '無 canShare' };
+        return { status: 'unknown', detail: t.noCanShare };
       }
       try {
         const file = new File([], 'x.zip', { type: 'application/zip' });
@@ -82,17 +86,21 @@ const CHECKS: readonly CheckDef[] = [
   },
   {
     id: 'user-agent',
-    label: '瀏覽器 UA',
-    neededFor: '回報問題對照',
+    label: (t) => t.userAgent,
+    neededFor: (t) => t.forReports,
     detect: () => ({ status: 'unknown', detail: navigator.userAgent }),
   },
 ];
 
-/** 只做功能偵測，同步回傳。不請求任何權限。 */
+/** Feature detection only, synchronous. Requests no permission. */
 export function runEnvChecks(): EnvCheckItem[] {
-  return CHECKS.map(({ id, label, neededFor, detect }) => {
+  const t = ui().env;
+  return CHECKS.map((def) => {
+    const { id } = def;
+    const label = def.label(t);
+    const neededFor = def.neededFor(t);
     try {
-      const { status, detail } = detect();
+      const { status, detail } = def.detect(t);
       return { id, label, status, detail, neededFor };
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
@@ -101,12 +109,6 @@ export function runEnvChecks(): EnvCheckItem[] {
   });
 }
 
-const STATUS_TEXT: Record<CheckStatus, string> = {
-  ok: '通過',
-  fail: '不通過',
-  unknown: '無法判斷',
-};
-
 function cell(tag: 'td' | 'th', text: string, className?: string): HTMLElement {
   const el = document.createElement(tag);
   el.textContent = text;
@@ -114,14 +116,15 @@ function cell(tag: 'td' | 'th', text: string, className?: string): HTMLElement {
   return el;
 }
 
-/** 在 container 內建立(或取代)一個 <table>,每個 item 一列。 */
+/** Builds (or replaces) a <table> inside container, one row per item. */
 export function renderEnvCheckTable(items: EnvCheckItem[], container: HTMLElement): void {
+  const t = ui().env;
   const table = document.createElement('table');
   table.className = 'env-check';
 
   const thead = document.createElement('thead');
   const headRow = document.createElement('tr');
-  for (const heading of ['項目', '狀態', '偵測值', '用於']) {
+  for (const heading of t.headings) {
     const th = cell('th', heading);
     th.setAttribute('scope', 'col');
     headRow.append(th);
@@ -134,7 +137,7 @@ export function renderEnvCheckTable(items: EnvCheckItem[], container: HTMLElemen
     row.dataset.id = item.id;
     row.append(
       cell('td', item.label),
-      cell('td', STATUS_TEXT[item.status], `status ${item.status}`),
+      cell('td', t.status[item.status], `status ${item.status}`),
       cell('td', item.detail, 'detail'),
       cell('td', item.neededFor),
     );

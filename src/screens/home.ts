@@ -3,7 +3,8 @@ import { buildExport, downloadExport } from '../export/json-export';
 import { renderPlacementPicker } from '../motion/index';
 import { deleteLegacySessions, deleteNight, listLegacySessions, listNights, putNight } from '../storage/db';
 import type { Nav } from './app';
-import { beginSession, button, el, errorParts, hhmm, newNight } from './app';
+import { beginSession, button, el, errorParts, hhmm, langToggle, newNight } from './app';
+import { ui } from '../i18n/index';
 import { createHoldButton } from './recording';
 
 export function textButton(label: string, onClick: () => void): HTMLButtonElement {
@@ -11,13 +12,14 @@ export function textButton(label: string, onClick: () => void): HTMLButtonElemen
 }
 
 export function renderHome(root: HTMLElement, nav: Nav, opts: { error?: string; errorName?: string } = {}): void {
-  root.append(el('h1', undefined, 'Zzz'));
+  const t = ui();
+  root.append(langToggle(() => nav.home()), el('h1', undefined, 'Zzz'));
   const main = el('section', 'home-main');
   root.append(main);
 
   if (opts.error) {
-    root.append(el('p', 'error', `無法開始：${opts.error}`));
-    if (opts.errorName === 'NotAllowedError') root.append(el('p', 'error', '請到 設定 → Safari → 麥克風 允許此網站'));
+    root.append(el('p', 'error', t.common.cannotStart(opts.error)));
+    if (opts.errorName === 'NotAllowedError') root.append(el('p', 'error', t.home.micDeniedHint));
   }
 
   const legacy = el('section', 'stored');
@@ -25,17 +27,18 @@ export function renderHome(root: HTMLElement, nav: Nav, opts: { error?: string; 
   void renderLegacy(legacy);
 
   const results = el('section', 'results');
-  root.append(textButton('環境檢查', () => renderEnvCheckTable(runEnvChecks(), results)), results);
+  root.append(textButton(t.home.envCheck, () => renderEnvCheckTable(runEnvChecks(), results)), results);
 
   void renderMain(root, main, nav);
 }
 
 async function renderMain(root: HTMLElement, main: HTMLElement, nav: Nav): Promise<void> {
+  const t = ui();
   let nights;
   try {
     nights = await listNights();
   } catch (err) {
-    main.append(el('p', 'error', `無法讀取紀錄：${errorParts(err).message}`));
+    main.append(el('p', 'error', t.home.cannotRead(errorParts(err).message)));
     return;
   }
   const unfinished = nights.find((n) => n.status !== 'stopped');
@@ -47,13 +50,13 @@ async function renderMain(root: HTMLElement, main: HTMLElement, nav: Nav): Promi
   if (last) {
     // One night at a time: the previous night must be deleted before a new one starts.
     main.append(
-      el('p', undefined, '上一晚的紀錄還在'),
-      el('p', 'muted', `${new Date(last.startedAt).toLocaleDateString()} ${hhmm(last.startedAt)} 開始`),
+      el('p', undefined, t.home.lastNightExists),
+      el('p', 'muted', t.home.startedAt(new Date(last.startedAt).toLocaleDateString(t.locale), hhmm(last.startedAt))),
     );
     const actions = el('div', 'actions');
     actions.append(
-      button('查看', 'secondary-button', () => nav.result(last.id)),
-      createHoldButton('長按 2 秒刪除這一晚', 2000, () => {
+      button(t.home.view, 'secondary-button', () => nav.result(last.id)),
+      createHoldButton(t.common.holdDeleteNight, 2000, () => {
         void deleteNight(last.id).then(() => {
           root.replaceChildren();
           renderHome(root, nav);
@@ -64,7 +67,7 @@ async function renderMain(root: HTMLElement, main: HTMLElement, nav: Nav): Promi
     return;
   }
 
-  const start = button('開始', 'start-button', () => {
+  const start = button(t.home.start, 'start-button', () => {
     if (start.disabled) return;
     start.disabled = true;
     const night = newNight();
@@ -88,6 +91,7 @@ async function renderMain(root: HTMLElement, main: HTMLElement, nav: Nav): Promi
 }
 
 async function renderLegacy(container: HTMLElement): Promise<void> {
+  const t = ui();
   let count = 0;
   try {
     count = (await listLegacySessions()).length;
@@ -97,12 +101,12 @@ async function renderLegacy(container: HTMLElement): Promise<void> {
   if (count === 0) return;
   const actions = el('div', 'actions');
   actions.append(
-    button('下載 JSON', 'secondary-button', () => {
+    button(t.home.downloadJson, 'secondary-button', () => {
       void buildExport().then(downloadExport);
     }),
-    createHoldButton('長按刪除舊紀錄', 2000, () => {
+    createHoldButton(t.home.holdDeleteLegacy, 2000, () => {
       void deleteLegacySessions().then(() => container.replaceChildren());
     }),
   );
-  container.replaceChildren(el('p', 'muted', `舊的測試紀錄：${count} 筆`), actions);
+  container.replaceChildren(el('p', 'muted', t.home.legacyCount(count)), actions);
 }

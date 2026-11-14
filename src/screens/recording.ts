@@ -2,6 +2,7 @@ import type { RunningSession } from '../monitor/session';
 import { motionLive } from '../motion/index';
 import type { NightRecord } from '../monitor/types';
 import type { LiveStatusFull } from './app';
+import { ui } from '../i18n/index';
 
 const OVERLAY_MS = 10_000;
 
@@ -63,6 +64,7 @@ export function renderRecording(
   onStopped: (nightId: string) => void,
 ): { update(s: LiveStatusFull): void } {
   document.body.classList.add('recording');
+  const t = ui().recording;
 
   const screen = document.createElement('div');
   screen.className = 'recording-screen';
@@ -71,29 +73,29 @@ export function renderRecording(
   overlay.className = 'status-overlay';
   overlay.hidden = true;
   const list = document.createElement('dl');
-  const elapsed = row(list, '經過時間', 'elapsed');
-  const frames = row(list, '本秒幀數', 'frames');
-  const db = row(list, '最近音量', 'db');
+  const elapsed = row(list, t.elapsed, 'elapsed');
+  const frames = row(list, t.frames, 'frames');
+  const db = row(list, t.level, 'db');
   const ctx = row(list, 'AudioContext', 'ctx');
   const wake = row(list, 'Wake lock', 'wakelock');
-  const eventsRow = row(list, '事件', 'events');
-  const snoreRow = row(list, '打呼', 'snore');
-  const motion = row(list, '動作', 'motion');
+  const eventsRow = row(list, t.events, 'events');
+  const snoreRow = row(list, t.snore, 'snore');
+  const motion = row(list, t.motion, 'motion');
 
   let stopping = false;
-  const stopButton = createHoldButton('長按 2 秒停止', 2000, () => {
+  const stopButton = createHoldButton(t.holdStop, 2000, () => {
     if (stopping) return;
     stopping = true;
     session.stop(night).then(() => onStopped(night.id), (err: unknown) => {
       stopping = false;
-      db.textContent = `停止失敗：${err instanceof Error ? err.message : String(err)}`;
+      db.textContent = t.stopFailed(err instanceof Error ? err.message : String(err));
     });
   });
   overlay.append(list, stopButton);
 
   const recover = document.createElement('p');
   recover.className = 'recover-prompt';
-  recover.textContent = '點一下螢幕以恢復監測';
+  recover.textContent = t.tapToRecover;
   recover.hidden = true;
 
   screen.append(overlay, recover);
@@ -122,11 +124,11 @@ export function renderRecording(
       wake.textContent = s.wakeLock;
       const m = motionLive();
       motion.textContent = !m ? '—'
-        : m.rateHz === null ? '等待第一個區間'
-        : `${m.rateHz.toFixed(0)} Hz · 上個區間動 ${m.lastActiveSec ?? 0} 秒`;
+        : m.rateHz === null ? t.motionWaiting
+        : t.motionLive(m.rateHz.toFixed(0), m.lastActiveSec ?? 0);
       const r = s.recorder;
-      eventsRow.textContent = r ? `${r.soundEventCount} 個` : '–';
-      snoreRow.textContent = r?.snapshot.inSnoreEpisode ? '打呼中' : r?.snapshot.state === 'warmup' ? '暖機中' : '—';
+      eventsRow.textContent = r ? ui().common.count(r.soundEventCount) : '–';
+      snoreRow.textContent = r?.snapshot.inSnoreEpisode ? t.snoring : r?.snapshot.state === 'warmup' ? t.warmup : '—';
       if (s.needsGesture !== needsGesture) {
         needsGesture = s.needsGesture;
         recover.hidden = !needsGesture;

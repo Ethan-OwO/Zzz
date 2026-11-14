@@ -1,4 +1,5 @@
 import './style.css';
+import { applyDocumentLang } from './i18n/index';
 import type { Nav } from './screens/app';
 import { live } from './screens/app';
 import { renderCalibrate } from './screens/calibrate';
@@ -42,4 +43,5 @@ const nav: Nav = {
   },
 };
 
+applyDocumentLang();
 nav.home();

@@ -270,7 +270,7 @@ async function m4Checks() {
     ],
   });
   try {
-    const context = await b.newContext({ permissions: ['microphone'], acceptDownloads: true });
+    const context = await b.newContext({ locale: 'zh-TW', permissions: ['microphone'], acceptDownloads: true });
     const page = await context.newPage();
     const consoleErrors = [];
     const pageErrors = [];
@@ -479,6 +479,42 @@ async function m4Checks() {
   }
 }
 
+// L1–L4: English version. An en-US browser gets English; the switch writes ?lang= into the
+// URL (so a reload keeps it) and nothing into localStorage.
+async function langChecks() {
+  const b = await chromium.launch();
+  try {
+    const context = await b.newContext({ locale: 'en-US' });
+    const page = await context.newPage();
+    const pageErrors = [];
+    page.on('pageerror', (err) => pageErrors.push(err.message));
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.getByRole('button', { name: 'Start', exact: true }).waitFor({ timeout: 5000 });
+    expect(await page.evaluate(() => document.documentElement.lang) === 'en', 'L1 en-US browser: English home, <html lang="en">');
+    await page.getByRole('button', { name: 'Device check' }).click();
+    const head = await page.locator('table.env-check th').allTextContents();
+    expect(head.join('|') === 'Item|Status|Detected|Needed for', 'L1 device check table is in English', head);
+
+    await page.getByRole('button', { name: '切換成中文' }).click();
+    await page.getByRole('button', { name: '開始', exact: true }).waitFor({ timeout: 5000 });
+    const url = new URL(page.url());
+    expect(url.searchParams.get('lang') === 'zh' && await page.evaluate(() => document.documentElement.lang) === 'zh-Hant',
+      'L2 switch → Chinese home, ?lang=zh in the URL, <html lang="zh-Hant">', page.url());
+    await page.reload({ waitUntil: 'load' });
+    await page.getByRole('button', { name: '開始', exact: true }).waitFor({ timeout: 5000 });
+    pass('L3 reload keeps Chinese through ?lang=zh');
+    expect(await page.evaluate(() => localStorage.length) === 0, 'L3 nothing written to localStorage');
+    await page.getByRole('button', { name: 'Switch to English' }).click();
+    await page.getByRole('button', { name: 'Start', exact: true }).waitFor({ timeout: 5000 });
+    expect(new URL(page.url()).searchParams.get('lang') === 'en' && pageErrors.length === 0,
+      'L4 switch back → English, ?lang=en, no page errors', pageErrors);
+  } catch (err) {
+    fail('L language checks threw', String(err));
+  } finally {
+    await b.close();
+  }
+}
+
 let browser;
 try {
   browser = await chromium.launch({
@@ -489,7 +525,7 @@ try {
       '--autoplay-policy=no-user-gesture-required',
     ],
   });
-  const context = await browser.newContext({ permissions: ['microphone'], acceptDownloads: true });
+  const context = await browser.newContext({ locale: 'zh-TW', permissions: ['microphone'], acceptDownloads: true });
   const page = await context.newPage();
   const consoleErrors = [];
   const pageErrors = [];
@@ -757,6 +793,7 @@ try {
   await browser.close();
   browser = undefined;
   await m4Checks();
+  await langChecks();
 } catch (err) {
   fail('browser checks threw', err instanceof Error ? err.stack : String(err));
 } finally {

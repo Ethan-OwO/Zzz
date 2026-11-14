@@ -120,7 +120,7 @@ export function classify(features: EventFeatures | null, p: ClassifyParams): Cla
     : { ...base, cls: 'snore', confidence: snoreScore, reason: 'snore' };
 }
 
-/** 畫面上的信心文字:≥ 0.8「高」、≥ 0.65「中」、其他「低」。 */
-export function confidenceLabel(c: number): '高' | '中' | '低' {
-  return c >= 0.8 ? '高' : c >= 0.65 ? '中' : '低';
+/** Confidence level for the screen: ≥ 0.8 high, ≥ 0.65 mid, else low (text comes from the i18n table). */
+export function confidenceLevel(c: number): 'high' | 'mid' | 'low' {
+  return c >= 0.8 ? 'high' : c >= 0.65 ? 'mid' : 'low';
 }

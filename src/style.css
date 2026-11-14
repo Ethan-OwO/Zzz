@@ -216,6 +216,12 @@ h1 {
 
 /* ---------- M2: recording screen ---------- */
 
+/* Language switch: top right, pulled up so the heading stays where it was. */
+.lang-toggle {
+  align-self: flex-end;
+  margin-bottom: -3rem;
+}
+
 body.recording {
   padding: 0;
   background: #000;
