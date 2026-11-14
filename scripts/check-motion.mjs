@@ -96,7 +96,7 @@ try {
     args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'],
   });
   // Chromium also exposes DeviceMotionEvent.requestPermission, so grant the sensors.
-  const context = await browser.newContext({ permissions: ['microphone', 'accelerometer', 'gyroscope'], acceptDownloads: true });
+  const context = await browser.newContext({ locale: 'zh-TW', permissions: ['microphone', 'accelerometer', 'gyroscope'], acceptDownloads: true });
   const page = await context.newPage();
   const consoleErrors = [];
   const pageErrors = [];
@@ -232,7 +232,7 @@ try {
 
   // C9 denied permission: a context without sensor permissions.
   {
-    const ctx2 = await browser.newContext({ permissions: ['microphone'] });
+    const ctx2 = await browser.newContext({ locale: 'zh-TW', permissions: ['microphone'] });
     const p2 = await ctx2.newPage();
     await p2.goto(url, { waitUntil: 'load' });
     const hasPrompt = await p2.evaluate(() => typeof DeviceMotionEvent.requestPermission === 'function');

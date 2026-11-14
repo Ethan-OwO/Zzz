@@ -8,6 +8,7 @@ import type { NightRecord } from '../monitor/types';
 import { deleteNight, putNight } from '../storage/db';
 import type { Nav } from './app';
 import { button, calibrationQuietSec, el, errorParts, fmtDb } from './app';
+import { ui } from '../i18n/index';
 
 const FRAMES_PER_SEC = SAMPLE_RATE / FRAME_SIZE;
 const SPEECH_SEC = 10;
@@ -15,6 +16,7 @@ const MAX_SPEECH_TRIES = 3;
 
 export function renderCalibrate(root: HTMLElement, session: RunningSession, night: NightRecord, nav: Nav): void {
   document.body.classList.add('calibrating');
+  const t = ui().calibrate;
   const screen = el('div', 'calibrate-screen');
   const step = el('p', 'calibrate-step');
   const prompt = el('p', 'calibrate-prompt');
@@ -22,7 +24,7 @@ export function renderCalibrate(root: HTMLElement, session: RunningSession, nigh
   count.dataset.field = 'countdown';
   const body = el('div', 'calibrate-body');
   let cancelled = false;
-  const cancel = button('取消', 'text-button', () => {
+  const cancel = button(t.cancel, 'text-button', () => {
     if (cancelled) return;
     cancelled = true;
     session.setCalibrationListener(null);
@@ -61,7 +63,7 @@ export function renderCalibrate(root: HTMLElement, session: RunningSession, nigh
 
   function quietStep(): void {
     step.textContent = '1 / 2';
-    prompt.textContent = `請保持安靜 ${calibrationQuietSec()} 秒，讓 Zzz 學習房間的背景聲音`;
+    prompt.textContent = t.quiet(calibrationQuietSec());
     collect(calibrationQuietSec(), quiet, speechStep);
   }
 
@@ -70,7 +72,7 @@ export function renderCalibrate(root: HTMLElement, session: RunningSession, nigh
     speech = [];
     body.replaceChildren();
     step.textContent = '2 / 2';
-    prompt.textContent = '用平常講話的音量，在枕頭的位置說：「晚安 Zzz，今天也辛苦了」';
+    prompt.textContent = t.speech;
     collect(SPEECH_SEC, speech, showResult);
   }
 
@@ -78,8 +80,8 @@ export function renderCalibrate(root: HTMLElement, session: RunningSession, nigh
     const base = computeCalibration(Uint8Array.from(quiet), Uint8Array.from(speech), night.params);
     let current: CalibrationResult = base;
     let adjust = 0;
-    step.textContent = '完成';
-    prompt.textContent = '校準結果';
+    step.textContent = t.done;
+    prompt.textContent = t.resultTitle;
     count.textContent = '';
 
     const list = el('dl', 'result');
@@ -89,21 +91,21 @@ export function renderCalibrate(root: HTMLElement, session: RunningSession, nigh
       list.append(el('dt', undefined, label), dd);
       return dd;
     };
-    row('背景', 'cal-floor', fmtDb(base.floorDb));
-    row('說話', 'cal-speech', base.speechDb === null ? '–' : fmtDb(base.speechDb));
-    const margin = row('觸發門檻', 'cal-margin', '');
+    row(t.floor, 'cal-floor', fmtDb(base.floorDb));
+    row(t.speechLevel, 'cal-speech', base.speechDb === null ? '–' : fmtDb(base.speechDb));
+    const margin = row(t.margin, 'cal-margin', '');
     const status = el('p', 'muted');
     status.dataset.field = 'cal-status';
     status.dataset.status = base.status;
     status.hidden = true;
 
     const notes: HTMLElement[] = [];
-    if (base.status === 'no-speech') notes.push(el('p', 'warning', '沒有聽清楚說話聲'));
-    if (base.status === 'too-noisy') notes.push(el('p', 'warning', '背景聲音起伏很大，說話可能不容易分辨'));
+    if (base.status === 'no-speech') notes.push(el('p', 'warning', t.noSpeech));
+    if (base.status === 'too-noisy') notes.push(el('p', 'warning', t.tooNoisy));
 
     const showMargin = () => {
       const eff = effectiveMargins(current, mode(), night.params).trigger;
-      margin.textContent = `背景 +${eff.toFixed(1)} dB`;
+      margin.textContent = t.marginValue(eff.toFixed(1));
     };
     const minus = button('−', 'secondary-button', () => {
       current = adjustMargin(current, -1, night.params);
@@ -115,19 +117,19 @@ export function renderCalibrate(root: HTMLElement, session: RunningSession, nigh
       adjust = current.triggerMarginDb - base.triggerMarginDb;
       showMargin();
     });
-    minus.setAttribute('aria-label', '門檻降低 1 dB');
-    plus.setAttribute('aria-label', '門檻提高 1 dB');
+    minus.setAttribute('aria-label', t.lowerAria);
+    plus.setAttribute('aria-label', t.raiseAria);
     const adjustRow = el('div', 'actions');
     adjustRow.append(minus, plus);
 
     // Formal: snoring is only logged as time ranges. Test: snores are recorded and the
     // trigger is lowered so more gets recorded, for tuning the detector.
     const modes = el('fieldset', 'modes');
-    modes.append(el('legend', undefined, '模式'));
+    modes.append(el('legend', undefined, t.mode));
     const radios: Record<'formal' | 'test', HTMLInputElement> = { formal: el('input'), test: el('input') };
     for (const [value, label, note] of [
-      ['formal', '正式', '打呼只記時段，不錄音'],
-      ['test', '測試', `打呼也錄音、門檻再降 ${night.params.testMarginOffsetDb} dB,會多錄一些`],
+      ['formal', t.formal, t.formalNote],
+      ['test', t.test, t.testNote(night.params.testMarginOffsetDb)],
     ] as const) {
       const r = radios[value];
       r.type = 'radio';
@@ -143,10 +145,10 @@ export function renderCalibrate(root: HTMLElement, session: RunningSession, nigh
 
     const actions = el('div', 'actions');
     if (base.status === 'no-speech' && tries < MAX_SPEECH_TRIES) {
-      actions.append(button('再說一次', 'secondary-button', speechStep));
+      actions.append(button(t.again, 'secondary-button', speechStep));
     }
     let starting = false;
-    const start = button(base.status === 'no-speech' ? '用預設門檻' : '開始睡覺', 'start-button', () => {
+    const start = button(base.status === 'no-speech' ? t.useDefault : t.startSleep, 'start-button', () => {
       if (starting) return;
       starting = true;
       start.disabled = true;
@@ -162,7 +164,7 @@ export function renderCalibrate(root: HTMLElement, session: RunningSession, nigh
           starting = false;
           start.disabled = false;
           status.hidden = false;
-          status.textContent = `無法開始：${errorParts(err).message}`;
+          status.textContent = ui().common.cannotStart(errorParts(err).message);
         });
     });
     actions.append(start);
@@ -170,8 +172,8 @@ export function renderCalibrate(root: HTMLElement, session: RunningSession, nigh
     showMargin();
     body.replaceChildren(
       list, ...notes, adjustRow, modes,
-      el('p', 'muted', '前幾晚建議用測試模式，早上可以聽聽看打呼判斷得準不準'),
-      el('p', 'muted', '可以鎖屏，請保持充電。這些數值之後還會依實際使用調整。'),
+      el('p', 'muted', t.tipTestMode),
+      el('p', 'muted', t.tipLock),
       status, actions,
     );
   }

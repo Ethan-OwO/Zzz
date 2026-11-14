@@ -6,6 +6,7 @@ import { needsMotionPrompt } from './permission.ts';
 import { chooseBedInGesture, getPlacement, lastPermission, setPlacement } from './placement.ts';
 import { startMotionRecorder, type MotionHandle } from './recorder.ts';
 import type { MotionLiveStatus, MotionPermission, Placement } from './types.ts';
+import { ui } from '../i18n/index.ts';
 
 export { renderPlacementPicker } from './placement.ts';
 export { deleteAllMotion, deleteMotionForSessions } from './motion-db.ts';
@@ -74,9 +75,9 @@ export async function motionSummary(sessionIds: string[]): Promise<string> {
   try {
     data = await getMotionData(sessionIds);
   } catch {
-    return '讀取失敗';
+    return ui().motionSummary.readFailed;
   }
-  if (data.length === 0) return '未啟用(床頭櫃)';
+  if (data.length === 0) return ui().motionSummary.off;
   const epochs = data.flatMap((s) => s.epochs);
   const filled = epochs.filter((e) => e.samples > 0);
   const moved = epochs.filter((e) => e.activeSec >= 1).length;
@@ -84,7 +85,7 @@ export async function motionSummary(sessionIds: string[]): Promise<string> {
   // A night with any binary session is binary as a whole (the weaker one decides).
   const qualities = data.map((s) => s.quality ?? decideQuality(s.epochs, s.params));
   const quality = qualities.includes('binary') ? 'binary' : qualities.includes('full') ? 'full' : 'none';
-  return `${epochs.length} 個區間，有動 ${moved} 個，平均 ${rate.toFixed(0)} Hz，品質 ${quality}`;
+  return ui().motionSummary.line(epochs.length, moved, rate.toFixed(0), quality);
 }
 
 /** Omitted sessionIds = every motion session. */

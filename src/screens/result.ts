@@ -2,7 +2,7 @@
 // M4 adds classification after Stop, labeling buttons, filters and the formal-mode snore audio drop.
 // M6 replaces this with the real report.
 import { evaluate, type EvalRow, type UserLabel } from '../classify/evaluate';
-import { confidenceLabel, type SoundClass } from '../classify/rules';
+import { confidenceLevel, type SoundClass } from '../classify/rules';
 import { classifyNight, dropSnoreAudio, nightMode } from '../classify/run';
 import { buildNightExport, downloadExport } from '../export/json-export';
 import { motionSummary } from '../motion/index';
@@ -14,6 +14,7 @@ import {
 import type { Nav } from './app';
 import { button, el, fmtDb, hhmm, hhmmss } from './app';
 import { createHoldButton } from './recording';
+import { ui } from '../i18n/index';
 
 function fmtDuration(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
@@ -43,7 +44,7 @@ class Player {
     void this.ctx.resume();
     this.owner = btn;
     this.ownerLabel = btn.textContent ?? '';
-    btn.textContent = '停止';
+    btn.textContent = ui().result.stop;
     const pcm = await readEventAudio(eventId);
     if (this.owner !== btn || pcm.length === 0) {
       if (this.owner === btn) this.stop();
@@ -83,11 +84,10 @@ class Player {
   }
 }
 
-const CLASS_TEXT: Record<SoundClass, string> = { snore: '打呼', talk: '說話', other: '其他' };
-const EVENT_LABELS: Array<[UserLabel, string]> = [['snore', '打呼'], ['talk', '說話'], ['other', '其他'], ['unsure', '?']];
-const EPISODE_LABELS: Array<[EpisodeLabel, string]> = [['snore', '是打呼'], ['not-snore', '不是'], ['unsure', '?']];
 type Filter = 'all' | SoundClass;
-const FILTERS: Array<[Filter, string]> = [['all', '全部'], ['talk', '說話'], ['snore', '打呼'], ['other', '其他']];
+const EVENT_LABELS: UserLabel[] = ['snore', 'talk', 'other', 'unsure'];
+const EPISODE_LABELS: EpisodeLabel[] = ['snore', 'not-snore', 'unsure'];
+const FILTERS: Filter[] = ['all', 'talk', 'snore', 'other'];
 
 /** A row of toggle buttons: tapping the selected one again clears it (null). */
 function labelRow<L extends string>(options: Array<[L, string]>, current: L | null | undefined,
@@ -122,10 +122,12 @@ function filterClassOf(ev: SoundEventRecord): SoundClass | null {
 }
 
 export async function renderResult(root: HTMLElement, nightId: string, nav: Nav): Promise<void> {
+  const t = ui().result;
+  const CLASS_TEXT = t.cls;
   root.append(el('h1', undefined, 'Zzz'));
   const loaded = await getNight(nightId);
   if (!loaded) {
-    root.append(el('p', 'error', '找不到這一晚的紀錄'), button('回首頁', 'text-button', () => nav.home()));
+    root.append(el('p', 'error', t.notFound), button(ui().common.backHome, 'text-button', () => nav.home()));
     return;
   }
   const night: NightRecord = loaded;
@@ -140,21 +142,21 @@ export async function renderResult(root: HTMLElement, nightId: string, nav: Nav)
 
   const list = el('dl', 'result');
   const rows: Array<[string, string, string]> = [
-    ['模式', 'mode', mode === 'test' ? '測試' : '正式'],
-    ['開始', 'started', new Date(night.startedAt).toLocaleString()],
-    ['結束', 'stopped', night.stoppedAt === null ? '–' : new Date(night.stoppedAt).toLocaleString()],
-    ['監測總長', 'duration', fmtDuration(monitoredMs)],
-    ['中斷次數', 'interruptions', String(Math.max(0, sessions.length - 1) + gaps)],
-    ['事件', 'event-count', `${mainEvents.length} 個`],
-    ['打呼', 'snore-summary', `${snoreEpisodes.length} 段，共 ${Math.round(snoreMs / 60000)} 分鐘`],
-    ['分類', 'class-summary', '分析中…'],
-    ['標記', 'label-summary', ''],
-    ['校準', 'calibration', cal
-      ? `背景 ${fmtDb(cal.floorDb)}、說話 ${cal.speechDb === null ? '–' : fmtDb(cal.speechDb)}、門檻 +${cal.triggerMarginDb.toFixed(1)} dB`
+    [t.rows.mode, 'mode', mode === 'test' ? t.modeTest : t.modeFormal],
+    [t.rows.started, 'started', new Date(night.startedAt).toLocaleString(ui().locale)],
+    [t.rows.stopped, 'stopped', night.stoppedAt === null ? '–' : new Date(night.stoppedAt).toLocaleString(ui().locale)],
+    [t.rows.duration, 'duration', fmtDuration(monitoredMs)],
+    [t.rows.interruptions, 'interruptions', String(Math.max(0, sessions.length - 1) + gaps)],
+    [t.rows.events, 'event-count', ui().common.count(mainEvents.length)],
+    [t.rows.snore, 'snore-summary', t.snoreSummary(snoreEpisodes.length, Math.round(snoreMs / 60000))],
+    [t.rows.classes, 'class-summary', t.analyzing],
+    [t.rows.labels, 'label-summary', ''],
+    [t.rows.calibration, 'calibration', cal
+      ? t.calibrationValue(fmtDb(cal.floorDb), cal.speechDb === null ? '–' : fmtDb(cal.speechDb), cal.triggerMarginDb.toFixed(1))
       : '–'],
-    ['動作', 'motion', await motionSummary(sessions.map((s) => s.id))],
-    ['已用音訊', 'audio-sec', `${Math.round(night.audioSecUsed)} 秒`],
-    ['儲存空間', 'storage', '–'],
+    [t.rows.motion, 'motion', await motionSummary(sessions.map((s) => s.id))],
+    [t.rows.audio, 'audio-sec', ui().common.seconds(Math.round(night.audioSecUsed))],
+    [t.rows.storage, 'storage', '–'],
   ];
   const cells = new Map<string, HTMLElement>();
   const terms = new Map<string, HTMLElement>();
@@ -170,7 +172,7 @@ export async function renderResult(root: HTMLElement, nightId: string, nav: Nav)
   navigator.storage?.estimate?.().then((est) => {
     const cell = cells.get('storage');
     if (cell && typeof est.usage === 'number' && typeof est.quota === 'number') {
-      cell.textContent = `已用 ${fmtMB(est.usage)} / 可用 ${fmtMB(est.quota)}`;
+      cell.textContent = t.storageValue(fmtMB(est.usage), fmtMB(est.quota));
     }
   }, () => {});
 
@@ -187,7 +189,7 @@ export async function renderResult(root: HTMLElement, nightId: string, nav: Nav)
   const episodesById = new Map(snoreEpisodes.map((e) => [e.id, e]));
   const reminder = el('p', 'warning');
   reminder.dataset.field = 'label-reminder';
-  reminder.textContent = '你的標記還沒下載，刪除後就沒了';
+  reminder.textContent = t.labelReminder;
 
   let classifyDone = false;
   const updateSummary = () => {
@@ -198,7 +200,7 @@ export async function renderResult(root: HTMLElement, nightId: string, nav: Nav)
     }
     const classCell = cells.get('class-summary')!;
     if (classifyDone) {
-      classCell.textContent = `說話 ${counts.talk} 段 · 打呼 ${counts.snore} 段(另有打呼時段 ${snoreEpisodes.length} 段)· 其他 ${counts.other} 段`;
+      classCell.textContent = t.classSummary(counts.talk, counts.snore, snoreEpisodes.length, counts.other);
     }
     const evalRows: EvalRow[] = [];
     let lastLabeledAt = 0;
@@ -219,7 +221,7 @@ export async function renderResult(root: HTMLElement, nightId: string, nav: Nav)
     labelCell.hidden = !showLabels;
     terms.get('label-summary')!.hidden = !showLabels;
     labelCell.textContent = showLabels
-      ? `已標記 ${r.n} 段，和自動分類一致 ${r.agreement === null ? '–' : Math.round(r.agreement * 100)}%`
+      ? t.labelSummary(r.n, r.agreement === null ? '–' : String(Math.round(r.agreement * 100)))
       : '';
     reminder.hidden = !(anyLabel && (night.jsonDownloadedAt ?? 0) < lastLabeledAt);
   };
@@ -242,21 +244,21 @@ export async function renderResult(root: HTMLElement, nightId: string, nav: Nav)
       if (ev().continuesFrom) li.classList.add('continued');
       const first = ev();
       const secs = Math.round(((first.endAt ?? first.startAt) - first.startAt) / 1000);
-      const parts = [`${hhmmss(first.startAt)} · ${secs} 秒 · 最大 ${fmtDb(first.peakDb)}`];
-      if (first.snoreLike) parts.push('像打呼');
+      const parts = [t.eventLine(hhmmss(first.startAt), secs, fmtDb(first.peakDb))];
+      if (first.snoreLike) parts.push(t.snoreLike);
       li.append(el('span', undefined, parts.join(' · ')));
       const audioNote = el('span', 'muted');
       audioNote.dataset.field = 'audio-note';
       li.append(audioNote);
       let play: HTMLButtonElement | null = null;
       if (first.hasAudio && first.sampleCount > 0) {
-        play = button('播放', 'secondary-button small', () => void player.toggle(play!, id));
+        play = button(t.play, 'secondary-button small', () => void player.toggle(play!, id));
         li.append(play);
       }
       const cls = el('span', 'class-line');
       cls.dataset.field = 'class';
       li.append(cls);
-      li.append(labelRow(EVENT_LABELS, first.userLabel, (label) => {
+      li.append(labelRow(EVENT_LABELS.map((l) => [l, t.eventLabels[l]]), first.userLabel, (label) => {
         const e = ev();
         e.userLabel = label;
         e.labeledAt = Date.now();
@@ -268,17 +270,17 @@ export async function renderResult(root: HTMLElement, nightId: string, nav: Nav)
         const e = ev();
         const c = e.classification;
         if (c) {
-          const text = c.cls === 'other' ? CLASS_TEXT.other : `${CLASS_TEXT[c.cls]} · 信心 ${confidenceLabel(c.confidence)}`;
+          const text = c.cls === 'other' ? CLASS_TEXT.other : `${CLASS_TEXT[c.cls]} · ${t.confidence(t.confidenceLevel[confidenceLevel(c.confidence)])}`;
           const differs = !!e.userLabel && e.userLabel !== 'unsure' && e.userLabel !== c.cls;
           cls.textContent = differs ? `${text} ≠` : text;
           cls.classList.toggle('differs', differs);
         } else {
-          cls.textContent = e.hasAudio && e.sampleCount > 0 ? '分析中…' : '';
+          cls.textContent = e.hasAudio && e.sampleCount > 0 ? t.analyzing : '';
         }
         if (e.audioDroppedAs === 'snore' || (!e.hasAudio && e.snoreEpisodeId !== null)) {
-          audioNote.textContent = '(打呼，未存音訊)';
+          audioNote.textContent = t.snoreNoAudio;
         } else if (!e.hasAudio) {
-          audioNote.textContent = '(超過音訊上限，未錄音)';
+          audioNote.textContent = t.overBudget;
         } else {
           audioNote.textContent = '';
         }
@@ -298,12 +300,12 @@ export async function renderResult(root: HTMLElement, nightId: string, nav: Nav)
       li.dataset.episodeId = ep.id;
       const mins = Math.round(((ep.endAt ?? ep.startAt) - ep.startAt) / 60000);
       li.append(el('span', undefined,
-        `${hhmm(ep.startAt)} – ${ep.endAt === null ? '?' : hhmm(ep.endAt)} · 打呼 ${mins} 分鐘 · 約 ${ep.burstCount} 聲`));
+        t.episodeLine(hhmm(ep.startAt), ep.endAt === null ? '?' : hhmm(ep.endAt), mins, ep.burstCount)));
       const sample = soundEvents.find((e) => e.snoreEpisodeId === ep.id && e.hasAudio && e.sampleCount > 0);
       if (sample) {
-        const play = button('聽樣本', 'secondary-button small', () => void player.toggle(play, sample.id));
+        const play = button(t.playSample, 'secondary-button small', () => void player.toggle(play, sample.id));
         li.append(play);
-        li.append(labelRow(EPISODE_LABELS, ep.userLabel, (label) => {
+        li.append(labelRow(EPISODE_LABELS.map((l) => [l, t.episodeLabels[l]]), ep.userLabel, (label) => {
           const rec = episodesById.get(ep.id)!;
           rec.userLabel = label;
           rec.labeledAt = Date.now();
@@ -315,7 +317,7 @@ export async function renderResult(root: HTMLElement, nightId: string, nav: Nav)
     }
     timeline.append(li);
   }
-  if (items.length === 0) timeline.append(el('li', 'muted', '沒有記錄到任何聲音'));
+  if (items.length === 0) timeline.append(el('li', 'muted', t.nothing));
 
   // ---------- filter ----------
   const filterRow = el('div', 'filters');
@@ -328,8 +330,8 @@ export async function renderResult(root: HTMLElement, nightId: string, nav: Nav)
     for (const v of eventViews) v.li.hidden = !v.matches(f);
   };
   let filter: Filter = 'all';
-  for (const [f, text] of FILTERS) {
-    const b = button(text, 'filter-button', () => {
+  for (const f of FILTERS) {
+    const b = button(f === 'all' ? t.filterAll : CLASS_TEXT[f], 'filter-button', () => {
       filter = f;
       applyFilter(f);
     });
@@ -348,11 +350,11 @@ export async function renderResult(root: HTMLElement, nightId: string, nav: Nav)
       await classifyNight(nightId, (p) => {
         total = p.total;
         progress.hidden = p.total === 0 || p.done >= p.total;
-        progress.textContent = `分析聲音中… ${p.done} / ${p.total}`;
+        progress.textContent = t.progress(p.done, p.total);
       });
     } catch (err) {
       progress.hidden = false;
-      progress.textContent = `分析失敗：${err instanceof Error ? err.message : String(err)}`;
+      progress.textContent = t.failed(err instanceof Error ? err.message : String(err));
       cells.get('class-summary')!.textContent = '–';
       return;
     }
@@ -368,7 +370,7 @@ export async function renderResult(root: HTMLElement, nightId: string, nav: Nav)
     updateSummary();
     if (total > 0) {
       const audioMin = soundEvents.reduce((s, e) => s + e.sampleCount, 0) / 16000 / 60;
-      timing.textContent = `分析 ${((performance.now() - t0) / 1000).toFixed(1)} 秒(${audioMin.toFixed(1)} 分鐘音訊)`;
+      timing.textContent = t.timing(((performance.now() - t0) / 1000).toFixed(1), audioMin.toFixed(1));
       timing.hidden = false;
     }
   })();
@@ -392,7 +394,7 @@ export async function renderResult(root: HTMLElement, nightId: string, nav: Nav)
   // ---------- actions ----------
   const actions = el('div', 'actions');
   actions.append(
-    button('下載除錯 JSON', 'secondary-button', () => {
+    button(t.downloadJson, 'secondary-button', () => {
       void buildNightExport(nightId)
         .then(downloadExport)
         .then(() => markJsonDownloaded(nightId))
@@ -401,14 +403,14 @@ export async function renderResult(root: HTMLElement, nightId: string, nav: Nav)
           updateSummary();
         });
     }),
-    createHoldButton('長按 2 秒刪除這一晚', 2000, () => {
+    createHoldButton(ui().common.holdDeleteNight, 2000, () => {
       left = true;
       window.removeEventListener('pagehide', onPageHide);
       player.stop();
       void deleteNight(nightId).then(() => nav.home());
     }),
   );
-  root.append(reminder, actions, button('回首頁', 'text-button', () => {
+  root.append(reminder, actions, button(ui().common.backHome, 'text-button', () => {
     leave();
     nav.home();
   }));

@@ -3,6 +3,7 @@
 // 「放床上」 tap and never competes with the microphone prompt in 「開始」.
 import { requestMotionPermissionInGesture } from './permission.ts';
 import type { MotionPermission, Placement } from './types.ts';
+import { ui } from '../i18n/index.ts';
 
 let placement: Placement = 'nightstand';
 let permission: MotionPermission | null = null;
@@ -37,21 +38,21 @@ export function chooseBedInGesture(): Promise<MotionPermission> {
   return p;
 }
 
-const HINTS: Partial<Record<MotionPermission, string>> = {
-  denied: '沒有取得動作權限，今晚只用聲音。可到 設定 → Safari → 動作與方向 開啟',
-  unsupported: '這支手機不支援動作感測，只用聲音',
-  error: '動作權限請求失敗，今晚只用聲音',
-};
+function hintText(r: MotionPermission): string | undefined {
+  const t = ui().placement;
+  return r === 'denied' ? t.denied : r === 'unsupported' ? t.unsupported : r === 'error' ? t.error : undefined;
+}
 
 export function renderPlacementPicker(container: HTMLElement): void {
+  const t = ui().placement;
   const wrap = document.createElement('div');
   wrap.className = 'placement';
   wrap.setAttribute('role', 'radiogroup');
-  wrap.setAttribute('aria-label', '手機放哪裡');
+  wrap.setAttribute('aria-label', t.question);
 
   const label = document.createElement('p');
   label.className = 'placement-label';
-  label.textContent = '手機放哪裡';
+  label.textContent = t.question;
 
   const options = document.createElement('div');
   options.className = 'placement-options';
@@ -73,8 +74,8 @@ export function renderPlacementPicker(container: HTMLElement): void {
     b.append(t, s);
     return b;
   };
-  const bed = make('bed', '放床上', '聲音 + 翻身');
-  const stand = make('nightstand', '放床頭櫃', '只用聲音');
+  const bed = make('bed', t.bed, t.bedSub);
+  const stand = make('nightstand', t.nightstand, t.nightstandSub);
 
   const sync = () => {
     for (const b of [bed, stand]) {
@@ -89,7 +90,7 @@ export function renderPlacementPicker(container: HTMLElement): void {
     const req = chooseBedInGesture();
     sync();
     void req.then((r) => {
-      const text = HINTS[r];
+      const text = hintText(r);
       hint.hidden = !text;
       hint.textContent = text ?? '';
     });

@@ -4,6 +4,7 @@ import { DEFAULT_PARAMS } from '../detect/params.ts';
 import type { RecorderStatus } from '../record/recorder';
 import type { LiveStatus, RunningSession } from '../monitor/session';
 import { startSession } from '../monitor/session';
+import { lang, setLang, ui } from '../i18n/index';
 import type { NightRecord } from '../monitor/types';
 
 export type LiveStatusFull = LiveStatus & { recorder: RecorderStatus | null };
@@ -70,6 +71,17 @@ export function button(label: string, className: string, onClick: () => void): H
   const b = el('button', className, label);
   b.type = 'button';
   b.addEventListener('click', onClick);
+  return b;
+}
+
+/** Top-right language switch. Only on screens where re-rendering is harmless (home, recovery). */
+export function langToggle(rerender: () => void): HTMLButtonElement {
+  const b = button(ui().switchTo, 'text-button lang-toggle', () => {
+    setLang(lang() === 'zh' ? 'en' : 'zh');
+    rerender();
+  });
+  b.setAttribute('aria-label', ui().switchToAria);
+  b.lang = lang() === 'zh' ? 'en' : 'zh-Hant';
   return b;
 }
 

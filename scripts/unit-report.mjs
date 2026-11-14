@@ -10,6 +10,10 @@ import { planWav, wavHeader } from '../src/export/wav.ts';
 import { renderReportMd } from '../src/export/report-md.ts';
 import { renderPromptMd } from '../src/export/prompt-md.ts';
 import { ZH_TW } from '../src/export/strings.ts';
+import { EN_US } from '../src/export/strings-en.ts';
+import { detectLang } from '../src/i18n/index.ts';
+import { EN } from '../src/i18n/en.ts';
+import { ZH } from '../src/i18n/zh.ts';
 import { DEFAULT_MOTION_PARAMS } from '../src/motion/params.ts';
 
 let failed = false;
@@ -308,6 +312,45 @@ console.log('— M: report.md / prompt.md (M7 T1)');
   const p = renderPromptMd(w2.r, w2.plan);
   check('M4 report.md has the medical note', md.includes(ZH_TW.note({ code: 'not-medical' }, String)));
   check('M4 prompt.md has the medical disclaimer', p.includes(medical) && p.includes('請不要做醫療診斷'));
+}
+
+// ---------------------------------------------------------------------------
+// I1–I3: English version (UI language choice, English export strings).
+{
+  check('I1 ?lang=en wins over a Chinese browser', detectLang('?lang=en', ['zh-TW']) === 'en');
+  check('I1 ?lang=zh wins over an English browser', detectLang('?hb=2&lang=zh', ['en-US']) === 'zh');
+  check('I1 unknown ?lang= falls back to the browser list', detectLang('?lang=fr', ['zh-Hant-TW']) === 'zh');
+  check('I1 zh-CN / zh-HK browsers get Chinese', detectLang('', ['zh-CN']) === 'zh' && detectLang('', ['zh-HK']) === 'zh');
+  check('I1 first zh*/en* entry decides', detectLang('', ['ja-JP', 'zh-TW', 'en-US']) === 'zh' && detectLang('', ['ja', 'en-GB', 'zh']) === 'en');
+  check('I1 no zh/en in the list → English', detectLang('', ['ja-JP', 'fr']) === 'en' && detectLang('', []) === 'en');
+  check('I1 "zhx" is not Chinese', detectLang('', ['zhx']) === 'en');
+}
+{
+  const cjk = /[　-〿一-鿿＀-￯]/;
+  // Walk the UI table, calling every function with sample arguments, and collect every string.
+  const texts = [];
+  const walk = (v) => {
+    if (typeof v === 'string') texts.push(v);
+    else if (typeof v === 'function') texts.push(String(v(...Array(v.length).fill(1))));
+    else if (v && typeof v === 'object') Object.values(v).forEach(walk);
+  };
+  const { switchTo, switchToAria, ...rest } = EN;
+  walk(rest);
+  const bad = texts.filter((t) => cjk.test(t));
+  check('I2 the English UI table has no Chinese text (besides the 中文 switch)', bad.length === 0, bad.join(' | '));
+  check('I2 the switch names the other language', EN.switchTo === '中文' && ZH.switchTo === 'English' && switchToAria === '切換成中文');
+  const keys = (o) => Object.keys(o).sort().join();
+  check('I2 both UI tables have the same top-level keys', keys(EN) === keys(ZH));
+}
+{
+  const cjk = /[　-〿一-鿿＀-￯]/;
+  const md = renderReportMd(w2.r, w2.plan, EN_US);
+  const p = renderPromptMd(w2.r, w2.plan, EN_US);
+  const pNoAudio = renderPromptMd(w2.r, planWav(w2.r, new Map()), EN_US);
+  check('I3 English report.md has no Chinese text', !cjk.test(md), md.split('\n').filter((l) => cjk.test(l)).join(' | '));
+  check('I3 English prompt.md (with and without audio) has no Chinese text', !cjk.test(p) && !cjk.test(pNoAudio));
+  check('I3 English report.md keeps the medical note', md.includes(EN_US.note({ code: 'not-medical' }, String)));
+  check('I3 English prompt.md keeps the no-diagnosis line', p.includes('do not make a medical diagnosis') && p.includes('cannot play or analyze night.wav'));
 }
 
 if (failed) {

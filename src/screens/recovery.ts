@@ -3,7 +3,8 @@ import type { NightRecord } from '../monitor/types';
 import { lastRecordedPlacement, motionResumeInGesture } from '../motion/index';
 import { deleteNight, getNightData, lastHeartbeatAt, putNight, putSession, putSnoreEpisode, putSoundEvents } from '../storage/db';
 import type { Nav } from './app';
-import { beginSession, button, el, errorParts, hhmm } from './app';
+import { beginSession, button, el, errorParts, hhmm, langToggle } from './app';
+import { ui } from '../i18n/index';
 
 const RESUME_LIMIT_MS = 12 * 3600 * 1000;
 
@@ -29,14 +30,15 @@ async function finalizeNight(night: NightRecord): Promise<number> {
 }
 
 export async function renderRecovery(root: HTMLElement, night: NightRecord, nav: Nav): Promise<void> {
-  root.append(el('h1', undefined, 'Zzz'));
+  const t = ui();
+  root.append(langToggle(() => nav.home()), el('h1', undefined, 'Zzz'));
   const main = el('section', 'home-main');
   root.append(main);
 
   if (night.status === 'calibrating') {
     main.append(
-      el('p', undefined, '上次校準沒有完成'),
-      button('重新開始', 'start-button', () => {
+      el('p', undefined, t.recovery.calibrationUnfinished),
+      button(t.recovery.restart, 'start-button', () => {
         void deleteNight(night.id).then(() => nav.home());
       }),
     );
@@ -47,8 +49,8 @@ export async function renderRecovery(root: HTMLElement, night: NightRecord, nav:
   // M5: resume motion only if this night had it; the iOS prompt must happen inside the tap below.
   const placement = await lastRecordedPlacement((await getNightData(night.id)).sessions.map((s) => s.id));
   main.append(
-    el('p', undefined, '上次監測沒有正常結束'),
-    el('p', 'muted', `最後一筆紀錄：${hhmm(last)}`),
+    el('p', undefined, t.recovery.notStopped),
+    el('p', 'muted', t.recovery.lastRecord(hhmm(last))),
   );
   const error = el('p', 'error');
   error.hidden = true;
@@ -56,7 +58,7 @@ export async function renderRecovery(root: HTMLElement, night: NightRecord, nav:
 
   if (Date.now() - last < RESUME_LIMIT_MS && night.calibration) {
     let starting = false;
-    const resume = button('繼續監測', 'start-button', () => {
+    const resume = button(t.recovery.resume, 'start-button', () => {
       if (starting) return;
       starting = true;
       resume.disabled = true;
@@ -72,12 +74,12 @@ export async function renderRecovery(root: HTMLElement, night: NightRecord, nav:
         starting = false;
         resume.disabled = false;
         error.hidden = false;
-        error.textContent = `無法開始：${errorParts(err).name}: ${errorParts(err).message}`;
+        error.textContent = t.common.cannotStart(`${errorParts(err).name}: ${errorParts(err).message}`);
       });
     });
     actions.append(resume);
   }
-  actions.append(button('結束並查看', 'secondary-button', () => {
+  actions.append(button(t.recovery.finishAndView, 'secondary-button', () => {
     night.status = 'stopped';
     night.stoppedAt = last;
     void putNight({ ...night }).then(() => nav.result(night.id));
