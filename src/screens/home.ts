@@ -58,7 +58,7 @@ async function renderMain(root: HTMLElement, main: HTMLElement, nav: Nav): Promi
     );
     const actions = el('div', 'actions');
     actions.append(
-      button(t.home.view, 'secondary-button', () => nav.result(last.id)),
+      button(t.home.view, 'start-button', () => nav.result(last.id)),
       createHoldButton(t.common.holdDeleteNight, 2000, () => {
         void deleteNight(last.id).then(() => {
           root.replaceChildren();

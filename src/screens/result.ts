@@ -269,6 +269,8 @@ export async function renderResult(root: HTMLElement, nightId: string, nav: Nav)
       const update = () => {
         const e = ev();
         const c = e.classification;
+        // Drives the colour bar on the row (style.css .timeline li[data-cls]).
+        li.dataset.cls = c?.cls ?? 'none';
         if (c) {
           const text = c.cls === 'other' ? CLASS_TEXT.other : `${CLASS_TEXT[c.cls]} · ${t.confidence(t.confidenceLevel[confidenceLevel(c.confidence)])}`;
           const differs = !!e.userLabel && e.userLabel !== 'unsure' && e.userLabel !== c.cls;
