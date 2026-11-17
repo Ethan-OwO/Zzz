@@ -12,7 +12,8 @@ export type DetectorAction =
   | { type: 'event-start'; eventKey: number; fromFrame: number; coreFromFrame: number; tentative: boolean; continuesKey: number | null }
   // tentative → 正式。snoreLike 只在 keepSnoreAudio 時出現
   | { type: 'event-commit'; eventKey: number; snoreLike: boolean }
-  | { type: 'event-discard'; eventKey: number; asSnore: true } // tentative 判定為打呼，丟掉音訊
+  // tentative 事件不存：'snore' = 判定為打呼(正式模式);'brief' = 超過門檻的總長不到 minAboveSec
+  | { type: 'event-discard'; eventKey: number; reason: 'snore' | 'brief' }
   // toFrame 不含;coreToFrame = 開始 post-roll 的那一幀(沒有 post-roll 時 = toFrame)
   | { type: 'event-end'; eventKey: number; toFrame: number; coreToFrame: number; reason: 'released' | 'split' | 'gap' | 'snore-confirmed' | 'floor-shift' }
   | { type: 'snore-start'; episodeKey: number; fromFrame: number; sampleEventKeys: number[]; bursts: Burst[] }
@@ -28,7 +29,9 @@ export interface DetectorSnapshot {
 interface OpenEvent {
   key: number;
   fromFrame: number;   // audio start of this segment
-  tentative: boolean;
+  tentative: boolean;  // not committed yet: audio still only in the ring
+  brief: boolean;      // tentative because it may still turn out shorter than minAboveSec
+  aboveFrames: number; // frames >= trigger so far (only counted while brief)
 }
 
 interface OpenBurst {
@@ -59,7 +62,10 @@ export class Detector {
   private readonly maxEventFrames: number;
   private readonly burstEndFrames: number;
   private readonly maxBurstFrames: number;
+  private readonly minAboveFrames: number;
+  private readonly briefMaxFrames: number;
   private readonly winSize: number;
+  private motionSec: (() => number | null) | null = null;
 
   // trigger window (ring of the last winSize frames)
   private readonly wFrame: Float64Array;
@@ -105,6 +111,10 @@ export class Detector {
     this.maxEventFrames = secToFrames(p.maxEventSec);
     this.burstEndFrames = secToFrames(p.burstEndSec);
     this.maxBurstFrames = secToFrames(p.snoreMaxBurstSec);
+    this.minAboveFrames = p.minAboveSec > 0 ? secToFrames(p.minAboveSec) : 0;
+    // A brief-pending event's audio lives only in the recorder's ring (preRoll + snoreMaxBurst + 2 s),
+    // so it is committed, whatever its length, 1 s before the ring would overwrite its start.
+    this.briefMaxFrames = secToFrames(p.preRollSec + p.snoreMaxBurstSec + 1);
     this.winSize = Math.max(1, p.triggerWindowFrames);
     this.wFrame = new Float64Array(this.winSize);
     this.wAbove = new Uint8Array(this.winSize);
@@ -120,6 +130,14 @@ export class Detector {
     for (let i = 0; i < q.length; i++) this.floor.push(q[i]!);
     if (this.floor.count > 0) this.warm = true;
     this.floorNow = this.floor.floorDb();
+  }
+
+  /**
+   * Moving seconds of the phone right now (max of the current and the last motion epoch), or null
+   * without motion data. Only used to keep a turn-over from being confirmed as snoring.
+   */
+  setMotionSource(fn: (() => number | null) | null): void {
+    this.motionSec = fn;
   }
 
   /** 每幀呼叫一次，依序回傳要執行的動作(可能為空陣列)。 */
@@ -164,9 +182,13 @@ export class Detector {
     const so = this.snore.onFrame(fi);
     if (so?.type === 'ended') this.endEpisode('quiet', so.lastBurstEndFrame, out);
 
-    // 4. event body: release, post-roll, merge
+    // 4. event body: minimum length, release, post-roll, merge
     const ev = this.event;
-    if (ev) {
+    if (ev?.brief) {
+      if (above) ev.aboveFrames++;
+      if (ev.aboveFrames >= this.minAboveFrames || fi + 1 - ev.fromFrame >= this.briefMaxFrames) this.commit(false, out);
+    }
+    if (ev && this.event === ev) {
       if (this.evState === 'post-roll' && triggered) {
         if (this.snore.inEpisode && !ev.tentative) {
           // In a snore episode every new sound starts its own tentative event, so a
@@ -178,7 +200,13 @@ export class Detector {
         }
       } else if (this.evState === 'active') {
         this.quietRun = below ? this.quietRun + 1 : 0;
-        if (this.quietRun >= this.releaseFrames) {
+        if (this.quietRun >= this.releaseFrames && ev.brief) {
+          // N2: a knock under minAboveSec is not worth an event. Keep it only when it may be
+          // the start of a snore run, so the episode still gets its sample audio.
+          if (this.snore.candidateCount >= 2) this.commit(false, out);
+          else this.discard('brief', out);
+        }
+        if (this.event === ev && this.quietRun >= this.releaseFrames) {
           this.evState = 'post-roll';
           this.coreTo = fi + 1 - this.quietRun;
           this.postCount = 0;
@@ -220,7 +248,7 @@ export class Detector {
       const coreTo = this.coreTo;
       this.endEvent('split', fi + 1, out);
       const key = this.nextEventKey++;
-      this.event = { key, fromFrame: fi + 1, tentative: false };
+      this.event = { key, fromFrame: fi + 1, tentative: false, brief: false, aboveFrames: 0 };
       this.evState = state;
       this.quietRun = quietRun;
       this.postCount = postCount;
@@ -340,7 +368,9 @@ export class Detector {
       peakDb: dequantizeDb(b.peakQ),
       lowRatio: b.ms > 0 ? b.lowMs / b.ms : 0,
     };
-    const r = this.snore.onBurst(burst);
+    const veto = this.p.motionVetoActiveSec;
+    const moving = veto > 0 && this.motionSec !== null && (this.motionSec() ?? 0) >= veto;
+    const r = this.snore.onBurst(burst, moving);
     if (r?.type === 'confirmed') {
       const from = r.episodeStartFrame;
       const sampleEventKeys = this.recent.filter((e) => e.to > from && e.from < endFrame).map((e) => e.key);
@@ -352,12 +382,12 @@ export class Detector {
       this.episodeKey = episodeKey;
       out.push({ type: 'snore-start', episodeKey, fromFrame: from, sampleEventKeys, bursts: r.bursts });
     } else if (r?.type === 'continued') {
-      if (this.event?.tentative) {
+      if (this.event?.tentative && !this.event.brief) {
         if (this.keepSnoreAudio) this.commit(true, out);
-        else this.discard(out);
+        else this.discard('snore', out);
       }
       out.push({ type: 'snore-burst', episodeKey: this.episodeKey!, burst });
-    } else if (this.event?.tentative) {
+    } else if (this.event?.tentative && !this.event.brief) {
       this.commit(false, out);
     }
   }
@@ -368,13 +398,16 @@ export class Detector {
     if (this.event?.tentative) this.commit(false, out);
   }
 
-  private startEvent(fi: number, tentative: boolean, out: DetectorAction[]): void {
+  /** snoreTentative: inside a snore episode, where every sound waits to be judged as a snore. */
+  private startEvent(fi: number, snoreTentative: boolean, out: DetectorAction[]): void {
     const floorFrom = Math.max(this.lastTo, this.gapFrame, 0);
     const ws = this.windowStart(fi);
     const coreFromFrame = Math.max(this.firstAboveInWindow(fi), floorFrom);
     const fromFrame = Math.max(ws - this.preFrames, floorFrom);
     const key = this.nextEventKey++;
-    this.event = { key, fromFrame, tentative };
+    const brief = !snoreTentative && this.minAboveFrames > 0;
+    const tentative = snoreTentative || brief;
+    this.event = { key, fromFrame, tentative, brief, aboveFrames: this.wAboveCount };
     this.eventCoreFrom = coreFromFrame;
     this.evState = 'active';
     this.quietRun = 0;
@@ -386,13 +419,14 @@ export class Detector {
   private commit(snoreLike: boolean, out: DetectorAction[]): void {
     const ev = this.event!;
     ev.tentative = false;
+    ev.brief = false;
     out.push({ type: 'event-commit', eventKey: ev.key, snoreLike });
   }
 
-  private discard(out: DetectorAction[]): void {
+  private discard(reason: 'snore' | 'brief', out: DetectorAction[]): void {
     const ev = this.event!;
     this.recent = this.recent.filter((e) => e.key !== ev.key);
-    out.push({ type: 'event-discard', eventKey: ev.key, asSnore: true });
+    out.push({ type: 'event-discard', eventKey: ev.key, reason });
     this.event = null;
     this.evState = 'idle';
     this.quietRun = 0;

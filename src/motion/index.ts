@@ -42,11 +42,17 @@ export function startMotion(sessionId: string): MotionHandle | null {
   if (!handle) return null;
   return {
     live: handle.live,
+    activeSecNow: () => handle.activeSecNow(),
     stop: async () => {
       await handle.stop();
       if (current === handle) current = null;
     },
   };
+}
+
+/** Moving seconds right now, for the snore detector (null without motion data). */
+export function motionActiveSecNow(): number | null {
+  return current ? current.activeSecNow() : null;
 }
 
 export function motionLive(): MotionLiveStatus | null {

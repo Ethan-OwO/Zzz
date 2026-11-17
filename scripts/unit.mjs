@@ -167,9 +167,9 @@ function lowRatioOf(freq) {
   }
   check('U-B2 512-sample frames vs sample-by-sample lowMs relative error < 1e-9', maxRel < 1e-9, maxRel.toExponential(2));
 }
-function hpGainDb(freq) {
+function hpGainDb(freq, cutoff = 150) {
   const x = sine(16000, freq, 2);
-  const hp = new HighPass(150, 16000);
+  const hp = new HighPass(cutoff, 16000);
   hp.processMeanSquare(x.subarray(0, 16000)); // settle
   const tail = x.subarray(16000);
   return 10 * Math.log10(hp.processMeanSquare(tail) / meanSquare(tail));
@@ -179,6 +179,13 @@ function hpGainDb(freq) {
   const g = Object.fromEntries([60, 90, 150, 200, 1000].map((f) => [f, +hpGainDb(f).toFixed(2)]));
   check('U-B3 HighPass(150): 60 Hz < -30, 90 Hz -17..-19, 150 Hz -3, 200 Hz > -0.7, 1 kHz > -0.05 dB',
     g[60] < -30 && g[90] < -17 && g[90] > -19 && Math.abs(g[150] + 3.01) < 0.2 && g[200] > -0.7 && g[1000] > -0.05, JSON.stringify(g));
+}
+{
+  // N2: the detection level now uses 300 Hz, so bed thumps below ~200 Hz lose 20+ dB more.
+  const g = Object.fromEntries([120, 150, 300, 600, 1000].map((f) => [f, +hpGainDb(f, DEFAULT_PARAMS.levelHighPassHz).toFixed(2)]));
+  check('U-B5 default HighPass(300): 120 Hz < -30, 150 Hz ≈ -24, 300 Hz -3, 600 Hz > -0.1, 1 kHz > -0.01 dB',
+    DEFAULT_PARAMS.levelHighPassHz === 300 && g[120] < -30 && Math.abs(g[150] + 24.1) < 0.5 && Math.abs(g[300] + 3.01) < 0.2 &&
+    g[600] > -0.1 && g[1000] > -0.01, JSON.stringify(g));
 }
 {
   const x = new Float32Array(16384).map((_, i) => Math.sin(i * 0.05) + 0.3 * Math.sin(i * 1.3));
@@ -260,13 +267,21 @@ const snoreBurst = (startSec, lenSec = 1, lowRatio = 0.8) =>
   const t = new SnoreTracker(P);
   check('U-S4 lowRatio 0.3 is not snore-like', t.isSnoreLike(snoreBurst(0, 1, 0.3)) === false);
 }
+{
+  // N2: a turn-over moves the phone a lot; snoring does not.
+  const t = new SnoreTracker(P);
+  const outs = [0, 4, 8, 12, 16, 20, 24, 28].map((s, i) => t.onBurst(snoreBurst(s), i === 3)?.type ?? null);
+  check('U-S5 a moving burst clears the candidates: confirmed only 4 bursts after it',
+    outs.slice(0, 7).every((o) => o === null) && outs[7] === 'confirmed', JSON.stringify(outs));
+}
 
 // ---------- M3: detector ----------
 const QUIET = -60;
 const msOf = (db) => 10 ** (db / 10);
 class Sim {
-  constructor(keepSnore = false) {
-    this.d = new Detector(P, 10, 6, keepSnore);
+  constructor(keepSnore = false, params = P, motion = null) {
+    this.d = new Detector(params, 10, 6, keepSnore);
+    if (motion) this.d.setMotionSource(motion);
     this.fi = 0;
     this.actions = [];
     this.add(30, QUIET); // warm-up
@@ -313,15 +328,18 @@ class Sim {
   const [st] = s.of('event-start');
   const [en] = s.of('event-end');
   const wsExpected = st ? st.at - P.triggerWindowFrames + 1 : NaN;
-  const ok = s.actions.length === 2 && st.fromFrame === wsExpected - secToFrames(5) &&
+  const [cm] = s.of('event-commit');
+  // Tentative until it has been above trigger for minAboveSec, then committed with all its audio.
+  const ok = s.actions.length === 3 && st.tentative && cm.at === soundStart + secToFrames(P.minAboveSec) - 1 &&
+    st.fromFrame === wsExpected - secToFrames(5) &&
     st.coreFromFrame === soundStart && en.reason === 'released' &&
     en.toFrame === soundEnd + secToFrames(2) + secToFrames(3) && en.coreToFrame === soundEnd;
-  check('U-D3 1 s sound: start with 5 s pre-roll, released after 2 s + 3 s', ok, JSON.stringify(s.actions));
+  check('U-D3 1 s sound: tentative start with 5 s pre-roll, committed at 0.5 s, released after 2 s + 3 s', ok, JSON.stringify(s.actions));
 }
 {
   const s = new Sim();
   s.add(10, QUIET); s.add(1, -45); s.add(3, QUIET); s.add(1, -45); s.add(10, QUIET);
-  check('U-D4 two sounds 3 s apart merge into one event', JSON.stringify(s.types()) === '["event-start","event-end:released"]',
+  check('U-D4 two sounds 3 s apart merge into one event', JSON.stringify(s.types()) === '["event-start:t","event-commit","event-end:released"]',
     JSON.stringify(s.types()));
 }
 {
@@ -345,13 +363,14 @@ class Sim {
     st[1].continuesKey === st[0].eventKey && st[2].continuesKey === st[1].eventKey;
   check('U-D6 130 s sound: 3 segments joined by split', ok, JSON.stringify(s.types()));
 }
-function snoreSim(insertAfter = -1, keep = false) {
-  const s = new Sim(keep);
+function snoreSim(insertAfter = -1, keep = false, motion = null) {
+  const s = new Sim(keep, P, motion);
   s.add(10, QUIET);
   for (let i = 0; i < 10; i++) {
     s.add(1, -40, 0.8);
     if (i === insertAfter) {
-      s.add(0.5, QUIET); s.add(1.5, -40, 0.2); s.add(1, QUIET);
+      // gaps of 0.9 s (> burstEndSec) keep it a burst of its own
+      s.add(0.9, QUIET); s.add(1.2, -40, 0.2); s.add(0.9, QUIET);
     } else {
       s.add(3, QUIET);
     }
@@ -366,9 +385,9 @@ function snoreSim(insertAfter = -1, keep = false) {
   const ss = s.of('snore-start')[0];
   const afterStart = t.slice(t.indexOf('snore-start') + 1);
   const expectTail = [];
-  for (let i = 0; i < 6; i++) expectTail.push('event-start:t', 'event-discard', 'snore-burst');
+  for (let i = 0; i < 6; i++) expectTail.push('event-start:t', 'event-discard:snore', 'snore-burst');
   expectTail.push('snore-end:quiet');
-  const ok = t[0] === 'event-start' && confirmedAt === 1 && t[2] === 'snore-start' && ss.sampleEventKeys.length > 0 &&
+  const ok = t[0] === 'event-start:t' && t[1] === 'event-commit' && confirmedAt === 2 && t[3] === 'snore-start' && ss.sampleEventKeys.length > 0 &&
     ss.sampleEventKeys.includes(s.of('event-start')[0].eventKey) &&
     JSON.stringify(afterStart) === JSON.stringify(expectTail);
   check('U-D7 10 snores: event, snore-confirmed, then tentative+discard per snore, snore-end', ok, JSON.stringify(t));
@@ -376,7 +395,8 @@ function snoreSim(insertAfter = -1, keep = false) {
 {
   const s = snoreSim(5);
   const t = s.types();
-  const commits = s.of('event-commit');
+  const episodeAt = s.of('snore-start')[0]?.at ?? Infinity;
+  const commits = s.of('event-commit').filter((a) => a.at > episodeAt);
   const committedKey = commits[0]?.eventKey;
   const endOfCommitted = s.actions.find((a) => a.type === 'event-end' && a.eventKey === committedKey);
   const ok = commits.length === 1 && endOfCommitted?.reason === 'released' &&
@@ -385,7 +405,8 @@ function snoreSim(insertAfter = -1, keep = false) {
 }
 {
   const s = snoreSim(-1, true);
-  const commits = s.of('event-commit');
+  const episodeAt = s.of('snore-start')[0]?.at ?? Infinity;
+  const commits = s.of('event-commit').filter((a) => a.at > episodeAt);
   check('keepSnoreAudio: snores in the episode are committed as snoreLike, none discarded',
     s.of('event-discard').length === 0 && commits.length === 6 && commits.every((c) => c.snoreLike), JSON.stringify(s.types()));
 }
@@ -436,6 +457,80 @@ function snoreSim(insertAfter = -1, keep = false) {
   d.seedFloor(Uint8Array.from(fill(156, quantizeDb(-60))));
   const snap = d.snapshot();
   check('seedFloor: calibration counts as warm-up', snap.state === 'idle' && snap.floorDb === -60, JSON.stringify(snap));
+}
+{
+  // N2: 6 of 27 events were 0.3–0.6 s knocks.
+  const s = new Sim();
+  s.add(10, QUIET); s.add(0.3, -40); s.add(10, QUIET);
+  check('U-D13 0.3 s knock: tentative start, discarded as brief, no event-end',
+    JSON.stringify(s.types()) === '["event-start:t","event-discard:brief"]', JSON.stringify(s.types()));
+}
+{
+  const s = new Sim();
+  s.add(10, QUIET); s.add(0.6, -40); s.add(10, QUIET);
+  check('U-D14 0.6 s sound is kept', JSON.stringify(s.types()) === '["event-start:t","event-commit","event-end:released"]',
+    JSON.stringify(s.types()));
+}
+{
+  // Knocks every 1.5 s: each above-trigger stretch is short, but together they pass 0.5 s.
+  const s = new Sim();
+  s.add(10, QUIET);
+  for (let i = 0; i < 3; i++) { s.add(0.3, -40); s.add(1.2, QUIET); }
+  s.add(10, QUIET);
+  check('U-D15 three 0.3 s knocks 1.5 s apart add up past 0.5 s: one kept event',
+    JSON.stringify(s.types()) === '["event-start:t","event-commit","event-end:released"]', JSON.stringify(s.types()));
+}
+{
+  // A never-ending trickle of short knocks must be committed before the ring overwrites its start.
+  const s = new Sim();
+  s.add(10, QUIET);
+  s.add(0.3, -40);
+  for (let i = 0; i < 12; i++) { s.add(1.5, QUIET); s.frame(-40); }
+  s.add(10, QUIET);
+  const st = s.of('event-start')[0];
+  const cm = s.of('event-commit')[0];
+  const ringFrames = secToFrames(P.preRollSec + P.snoreMaxBurstSec + 2);
+  check('U-D16 sparse knocks: committed before the audio start leaves the ring',
+    st && cm && cm.at - st.fromFrame < ringFrames && s.of('event-discard').length === 0,
+    JSON.stringify({ types: s.types(), lag: cm && st ? cm.at - st.fromFrame : null, ringFrames }));
+}
+{
+  // Short snores (0.4 s) still form an episode: the first is dropped as brief, the second is
+  // kept because it continues a snore run, and the episode gets it as its sample.
+  const s = new Sim();
+  s.add(10, QUIET);
+  for (let i = 0; i < 8; i++) { s.add(0.4, -40, 0.8); s.add(3.6, QUIET); }
+  s.add(30, QUIET);
+  const ss = s.of('snore-start')[0];
+  const t = s.types();
+  check('U-D19 0.4 s snores every 4 s: first discarded as brief, next kept, episode confirmed with a sample',
+    t[0] === 'event-start:t' && t[1] === 'event-discard:brief' && t[3] === 'event-commit' && ss && ss.sampleEventKeys.length > 0,
+    JSON.stringify(t.slice(0, 10)));
+}
+function rustle(params) {
+  // N2 07:35: a turn-over is ~13 s of rustle with short dips; at 0.32 s the dips cut it into
+  // 2.5 s "snores" every 3 s.
+  const s = new Sim(false, params);
+  s.add(10, QUIET);
+  for (let i = 0; i < 5; i++) { s.add(2.5, -40, 0.9); s.add(0.5, QUIET); }
+  s.add(20, QUIET);
+  return s;
+}
+{
+  const old = rustle({ ...P, burstEndSec: 0.32 });
+  const now = rustle(P);
+  check('U-D17 rustle with 0.5 s dips: was a snore at burstEndSec 0.32, is one plain event now',
+    old.of('snore-start').length === 1 && now.of('snore-start').length === 0 &&
+    JSON.stringify(now.types()) === '["event-start:t","event-commit","event-end:released"]',
+    JSON.stringify({ old: old.types(), now: now.types() }));
+}
+{
+  const moving = snoreSim(-1, false, () => 20);
+  const small = snoreSim(-1, false, () => 1);
+  const none = snoreSim(-1, false, () => null);
+  check('U-D18 snore rhythm while the phone moves a lot (20 s) is not confirmed; small (1 s) or no motion data still is',
+    moving.of('snore-start').length === 0 && small.of('snore-start').length === 1 && none.of('snore-start').length === 1,
+    JSON.stringify({ moving: moving.of('snore-start').length, small: small.of('snore-start').length, none: none.of('snore-start').length }));
 }
 
 // ---------- M3: ring ----------

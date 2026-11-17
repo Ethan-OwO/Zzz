@@ -1,7 +1,7 @@
 import { AudioCapture, errText } from '../audio/capture';
 import { HighPass, LowPass, computeFeatures } from '../detect/bands.ts';
 import { DEFAULT_PARAMS, FRAME_SIZE, SAMPLE_RATE } from '../detect/params.ts';
-import { startMotion } from '../motion/index';
+import { motionActiveSecNow, startMotion } from '../motion/index';
 import { Recorder } from '../record/recorder';
 import type { RecorderStatus } from '../record/recorder';
 import { addEvents, addHeartbeat, getNightData, putNight, putSession } from '../storage/db';
@@ -340,6 +340,7 @@ export async function startSession(opts: {
         priorEventCount,
         priorSnoreCount,
         seedFloor,
+        motionActiveSec: motionActiveSecNow,
       });
     },
     recoverFromGesture(): void {

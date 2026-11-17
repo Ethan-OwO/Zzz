@@ -384,7 +384,7 @@ async function m4Checks() {
       await page.waitForTimeout(300);
       const after = await reminder.isVisible();
       const jev = json.nights?.[0]?.soundEvents?.find((e) => e.id === evRustle.id);
-      expect(before && !after && FILE_RE.test(name) && json.schema === 'zzz-m4/1' && json.classifyParams?.version === 1 &&
+      expect(before && !after && FILE_RE.test(name) && json.schema === 'zzz-m4/1' && json.classifyParams?.version === 2 &&
         json.featuresVersion === 1 && jev?.userLabel === 'talk' && jev?.features?.version === 1 && !text.includes('"pcm"'),
         'F9 reminder shows, download hides it; JSON zzz-m4/1 with classifyParams, featuresVersion, label and features, no pcm',
         { before, after, name, schema: json.schema });

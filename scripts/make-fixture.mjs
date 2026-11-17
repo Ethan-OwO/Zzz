@@ -3,7 +3,9 @@
 //   0–110 s  background: white noise through a 1-pole 2 kHz low-pass, RMS -60 dBFS
 //   6–10 s   calibration speech: 300–3000 Hz band noise × 4 Hz envelope, -28 dBFS
 //   30–32 s  event A (speech), -30 dBFS
-//   45–84 s  snoring: 1.0 s bursts every 4 s (45, 49, …, 81), < 200 Hz noise, 0.1 s fades, -30 dBFS
+//   45–84 s  snoring: 1.0 s bursts every 4 s (45, 49, …, 81), < 600 Hz noise, 0.1 s fades, -30 dBFS
+//            (N2: was < 200 Hz, which real snores are not: they carry harmonics up to ~1 kHz, and the
+//            300 Hz detection high-pass would hide a snore with nothing above 200 Hz)
 //   67–68.5 s event B (speech inside the snore episode), -30 dBFS
 // Usage: node scripts/make-fixture.mjs <out.wav>
 //
@@ -85,7 +87,7 @@ function speech(sec, db) {
 }
 function snore(sec, db) {
   const n = Math.round(sec * RATE);
-  const x = biquadLowPass(biquadLowPass(noise(n), 200), 200);
+  const x = biquadLowPass(biquadLowPass(noise(n), 600), 600);
   scaleTo(x, db);
   const fade = Math.round(0.1 * RATE);
   for (let i = 0; i < fade; i++) {

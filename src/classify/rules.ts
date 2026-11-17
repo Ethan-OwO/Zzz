@@ -21,6 +21,7 @@ export interface ClassifyParams {
   snoreIntervalCvMax: number;
   snoreModMax: number; // 調變比高於此值，打呼分數乘 (1 − 說話調變分數)
   snoreWeights: [number, number, number]; // lowRatio / 節律 / 低調變
+  snoreNoRhythmCap: number; // 沒有完整節律(≥3 聲且間隔規律)時，打呼分數最高只到這裡
   // 決策
   minScore: number; // 最高分低於此 → other
   minMargin: number; // 最高分與次高分差距低於此 → other
@@ -30,7 +31,7 @@ export interface ClassifyParams {
 
 /** 🎛 Starting values; T3 tunes them from user labels. */
 export const DEFAULT_CLASSIFY_PARAMS: ClassifyParams = {
-  version: 1,
+  version: 2,
   minActiveSec: 0.3,
   talkSpeechRatio: [0.45, 0.7],
   talkMod: [0.25, 0.45],
@@ -44,6 +45,9 @@ export const DEFAULT_CLASSIFY_PARAMS: ClassifyParams = {
   snoreIntervalCvMax: 0.4,
   snoreModMax: 0.3,
   snoreWeights: [0.45, 0.35, 0.2],
+  // N2 (v2): a single low thump scored 0.45 + 0.20 = 0.65 with no rhythm at all. Snoring repeats
+  // with breathing, so without the full rhythm the score stays below minScore.
+  snoreNoRhythmCap: 0.5,
   minScore: 0.6,
   minMargin: 0.15,
   dropMinConfidence: 0.8,
@@ -95,7 +99,7 @@ export function snoreScoreOf(f: EventFeatures, p: ClassifyParams): number {
   const sMod = f.syllabicModRatio === null ? 0.5 : 1 - modTalk;
   let s = w1 * sLow + w2 * sRhythm + w3 * sMod;
   if (f.syllabicModRatio !== null && f.syllabicModRatio > p.snoreModMax) s *= 1 - modTalk;
-  return s;
+  return sRhythm < 1 ? Math.min(s, p.snoreNoRhythmCap) : s;
 }
 
 /** 純函式：只依特徵與參數分類。features 為 null → other, reason 'no-features'。 */

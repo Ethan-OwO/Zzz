@@ -293,6 +293,19 @@ check('U-R6 ramp edges: a→0, b→1, null→0, mid linear',
   check('U-R7 classify(null) → other, no-features', c.cls === 'other' && c.reason === 'no-features' && c.confidence === 1, show(c));
 }
 check('U-R8 DEFAULT_CLASSIFY_PARAMS.dropMinConfidence is 0.8', P.dropMinConfidence === 0.8, String(P.dropMinConfidence));
+{
+  // N2 (v2): low thumps with 1–2 bursts or an irregular rhythm scored 0.64–0.80 snore. Features
+  // copied from that night's export (02:11, 05:26, 06:20).
+  const base = { version: 1, coreSec: 2, activeSec: 1.5, peakAboveFloorDb: 35, speechRatio: 0.05, highRatio: 0,
+    flatnessMedian: 0.01, centroidMedianHz: 130, voicedFraction: 0.5, f0MedianHz: 90, f0IqrSemitones: 2 };
+  const cases = [
+    { ...base, lowRatio: 0.97, syllabicModRatio: 0.25, burstCount: 1, burstMedianSec: 2.46, burstIntervalMedianSec: null, burstIntervalCv: null },
+    { ...base, lowRatio: 0.99, syllabicModRatio: 0.27, burstCount: 2, burstMedianSec: 0.69, burstIntervalMedianSec: 2.46, burstIntervalCv: null },
+    { ...base, lowRatio: 0.76, syllabicModRatio: 0.26, burstCount: 6, burstMedianSec: 0.82, burstIntervalMedianSec: 1.22, burstIntervalCv: 1.09 },
+  ].map((f) => classify(f, P));
+  check('U-R9 no full rhythm → snore score ≤ 0.5 → other', P.version === 2 &&
+    cases.every((c) => c.cls === 'other' && c.snoreScore <= P.snoreNoRhythmCap), cases.map(show).join(' | '));
+}
 
 // ---------- U-V: evaluate ----------
 {

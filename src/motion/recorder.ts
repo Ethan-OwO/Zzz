@@ -5,6 +5,8 @@ import type { MotionEpoch, MotionLiveStatus, MotionPermission, MotionSessionReco
 
 export interface MotionHandle {
   readonly live: MotionLiveStatus;
+  /** Moving seconds of the current or last epoch; null before the first sample. */
+  activeSecNow(): number | null;
   stop(): Promise<void>;
 }
 
@@ -105,6 +107,7 @@ function start(sessionId: string, permission: MotionPermission, params: MotionPa
   let stopped = false;
   return {
     live,
+    activeSecNow: () => acc.activeSecNow(),
     async stop(): Promise<void> {
       if (stopped) return;
       stopped = true;

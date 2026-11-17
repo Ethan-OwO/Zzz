@@ -32,6 +32,8 @@ export interface DetectParams {
   testMarginOffsetDb: number;  // test mode: trigger margin is lowered by this much (clamped to 6 dB)
   levelHighPassHz: number;     // the level compared with the thresholds is high-passed here first (0 = off)
   floorShiftSec: number;       // an event this long whose quietest 20% stays above release = new background
+  minAboveSec: number;         // an event whose frames above trigger add up to less than this is discarded
+  motionVetoActiveSec: number; // this many moving seconds in the current or last motion epoch block snore confirmation (0 = off)
 }
 
 // Background in a quiet iPhone bedroom measured about -66..-70 dBFS in M2;
@@ -48,7 +50,9 @@ export const DEFAULT_PARAMS: DetectParams = Object.freeze({
   preRollSec: 5,
   postRollSec: 3,
   maxEventSec: 60,
-  burstEndSec: 0.32,
+  // N2 (2026-11-17): 0.32 s cut one 13 s turn-over rustle into 4 "snores". Real snores are
+  // separated by a quiet exhale of 1.5 s or more, so a shorter dip belongs to the same sound.
+  burstEndSec: 0.8,
   snoreLowCutHz: 500,
   snoreMinLowRatio: 0.55,
   snoreMinBurstSec: 0.3,
@@ -61,10 +65,17 @@ export const DEFAULT_PARAMS: DetectParams = Object.freeze({
   audioBudgetSec: 7200,
   // N1 (2026-11-14): 3 dB made test nights record a ~90 Hz hum barely above the trigger.
   testMarginOffsetDb: 1,
-  // N1: a steady ~90 Hz hum (AC / fan) triggered most events; 4th-order 150 Hz cuts it by ~18 dB.
-  levelHighPassHz: 150,
+  // N1: a steady ~90 Hz hum (AC / fan) triggered most events; 4th-order 150 Hz cut it by ~18 dB.
+  // N2: with the phone on the bed, 14 of 27 events were thumps below ~200 Hz that 150 Hz barely
+  // touches (-8 dB at 120 Hz). 300 Hz takes ~24 dB off 150 Hz and ~32 dB off 120 Hz; speech is
+  // untouched and snores keep their harmonics.
+  levelHighPassHz: 300,
   // N1: a background step took the 300 s p20 floor ~4 min to absorb; rebase after 30 s instead.
   floorShiftSec: 30,
+  // N2: 6 of 27 events were 0.3–0.6 s knocks.
+  minAboveSec: 0.5,
+  // N2: the turn-over had 20 moving seconds in its epoch; other small movements had 1–7.
+  motionVetoActiveSec: 3,
 });
 
 /** 把秒數換成幀數，四捨五入，至少 1。 */
