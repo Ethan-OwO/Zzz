@@ -37,6 +37,8 @@ export class EpochAccumulator {
   private hiddenSince: number | null = null;
 
   private prevGravity: [number, number, number] | null = null;
+  private lastActiveSec = 0;
+  private everSampled = false;
 
   constructor(sessionId: string, startWall: number, startPerf: number, params: MotionParams) {
     this.sessionId = sessionId;
@@ -79,6 +81,19 @@ export class EpochAccumulator {
     return closed;
   }
 
+  /**
+   * Moving seconds right now: the larger of the current (partial) epoch and the last closed one,
+   * so a movement still counts just after an epoch boundary. Null before the first sample.
+   */
+  activeSecNow(): number | null {
+    if (!this.everSampled) return null;
+    let cur = 0;
+    for (let i = 0; i < this.secMax.length; i++) {
+      if ((this.secMax[i] ?? 0) > this.p.moveThresholdMs2) cur++;
+    }
+    return Math.max(cur, this.lastActiveSec);
+  }
+
   tick(nowPerf: number): MotionEpoch[] {
     return this.advanceTo(nowPerf);
   }
@@ -108,6 +123,7 @@ export class EpochAccumulator {
 
   private accumulate(d: number, dtMs: number, x: number, y: number, z: number, tMs: number): void {
     this.samples++;
+    this.everSampled = true;
     this.coveredSec += dtMs / 1000;
     this.activity += Math.max(0, d - this.p.deadbandMs2) * (dtMs / 1000);
     if (d > this.peak) this.peak = d;
@@ -157,6 +173,7 @@ export class EpochAccumulator {
       hiddenMs: Math.round(hiddenMs),
     };
     this.idx++;
+    this.lastActiveSec = activeSec;
     this.samples = 0;
     this.coveredSec = 0;
     this.activity = 0;

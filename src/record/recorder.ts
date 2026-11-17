@@ -27,6 +27,8 @@ export interface RecorderHooks {
   priorSnoreCount: number;
   /** Quantized dB of the calibration's quiet phase; seeds the noise floor. */
   seedFloor: Uint8Array | null;
+  /** Moving seconds of the phone right now (M5), or null without motion data. Optional. */
+  motionActiveSec?: () => number | null;
 }
 
 const FRAME_MS = (FRAME_SIZE / SAMPLE_RATE) * 1000;
@@ -97,6 +99,7 @@ export class Recorder {
     const { trigger, release } = effectiveMargins(cal, night.mode, p);
     this.detector = new Detector(p, trigger, release, night.mode === 'test');
     if (hooks.seedFloor && hooks.seedFloor.length > 0) this.detector.seedFloor(hooks.seedFloor);
+    if (hooks.motionActiveSec) this.detector.setMotionSource(hooks.motionActiveSec);
     this.lp = new LowPass(p.snoreLowCutHz, SAMPLE_RATE);
     this.hp = new HighPass(p.levelHighPassHz, SAMPLE_RATE);
     this.ring = new Int16Ring((p.preRollSec + p.snoreMaxBurstSec + 2) * SAMPLE_RATE);
@@ -216,6 +219,11 @@ export class Recorder {
       }
       case 'event-discard':
         this.events.delete(a.eventKey);
+        if (a.reason === 'brief') {
+          // Only the count is kept, so the export still shows how many knocks were skipped.
+          this.night.briefDiscarded = (this.night.briefDiscarded ?? 0) + 1;
+          this.enqueue({ kind: 'night' });
+        }
         break;
       case 'event-end': {
         const ev = this.events.get(a.eventKey);

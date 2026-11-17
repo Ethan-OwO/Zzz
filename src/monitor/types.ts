@@ -84,6 +84,7 @@ export interface NightRecord {
   paramsVersion: 1;
   params: DetectParams;               // 當晚使用的參數全文，方便之後調校對照
   jsonDownloadedAt?: number | null;   // M4: last debug JSON download
+  briefDiscarded?: number;            // N2: events dropped for being shorter than params.minAboveSec
 }
 
 export interface SoundEventRecord {

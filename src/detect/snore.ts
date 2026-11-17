@@ -42,8 +42,17 @@ export class SnoreTracker {
     return sec >= this.p.snoreMinBurstSec && sec <= this.p.snoreMaxBurstSec && b.lowRatio >= this.p.snoreMinLowRatio;
   }
 
-  /** 一聲結束時呼叫。回傳狀態變化。 */
-  onBurst(b: Burst): SnoreOutput {
+  /** Bursts in the current not-yet-confirmed run (0 inside an episode). */
+  get candidateCount(): number {
+    return this.episode ? 0 : this.candidates.length;
+  }
+
+  /**
+   * 一聲結束時呼叫。回傳狀態變化。
+   * moving: the phone (on the bed) is moving a lot right now. A snoring sleeper lies still, and a
+   * turn-over makes rhythmic rustles, so a big movement drops the candidates instead of confirming.
+   */
+  onBurst(b: Burst, moving = false): SnoreOutput {
     const p = this.p;
     if (this.episode) {
       const last = this.last!;
@@ -55,7 +64,7 @@ export class SnoreTracker {
       return null;
     }
 
-    if (!this.isSnoreLike(b)) {
+    if (moving || !this.isSnoreLike(b)) {
       this.candidates = [];
       return null;
     }

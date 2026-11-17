@@ -151,6 +151,27 @@ let a2activity = 0;
   check('hidden ms split across epochs', a[0].hiddenMs === 10_000 && b[0].hiddenMs === 10_000, `${a[0]?.hiddenMs}/${b[0]?.hiddenMs}`);
 }
 
+// activeSecNow (N2: feeds the snore detector's movement veto)
+{
+  const acc = new EpochAccumulator('s', 0, 0, P);
+  const before = acc.activeSecNow();
+  const noise = rng(7);
+  const sample = (t, moving) => {
+    const s = still(noise);
+    if (moving) s[2] += Math.sin(2 * Math.PI * 2 * (t / 1000));
+    acc.addSample(s[0], s[1], s[2], t);
+  };
+  for (let t = 0; t < 20_000; t += DT) sample(t, t >= 5_000 && t < 10_000);
+  const during = acc.activeSecNow();
+  for (let t = 20_000; t < 40_000; t += DT) sample(t, false); // epoch 0 closes at 30 s
+  const nextEpoch = acc.activeSecNow();
+  for (let t = 40_000; t < 61_000; t += DT) sample(t, false); // epoch 1 (still) closes at 60 s
+  const later = acc.activeSecNow();
+  check('activeSecNow: null before samples, counts the open epoch, keeps the last epoch, then 0',
+    before === null && during >= 4 && during <= 6 && nextEpoch === during && later === 0,
+    `${before}/${during}/${nextEpoch}/${later}`);
+}
+
 if (failed) {
   console.log('unit-motion: FAILED');
   process.exit(1);
